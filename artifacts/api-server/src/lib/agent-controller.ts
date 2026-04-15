@@ -224,8 +224,9 @@ class AgentController {
   }
 
   /**
-   * On startup, reconcile any open trades in the DB against live broker positions.
-   * This ensures state is consistent if the process restarted mid-trade.
+   * On startup, reconcile any open trades in the DB against live broker positions
+   * AND rebuild per-instrument counters (todayTrades, longLosses, shortLosses) from
+   * today's closed trades. This ensures daily caps remain enforced after a restart.
    */
   private async reconcileOnStartup(): Promise<void> {
     if (!this.client) return;
@@ -238,8 +239,39 @@ class AgentController {
       this.previousPositionsCache = livePositions;
       this.lastPositionFetch = Date.now();
 
-      // Find any open trades in the DB for today
       const today = this.currentDate;
+
+      // -----------------------------------------------------------------------
+      // Rebuild per-instrument counters from today's closed trades in the DB.
+      // This preserves daily caps (maxTradesPerDay, maxLossesPerDirection)
+      // across process restarts.
+      // -----------------------------------------------------------------------
+      const closedTrades = await db
+        .select()
+        .from(tradesTable)
+        .where(
+          and(
+            eq(tradesTable.status, "closed"),
+            sql`date(entry_time) = ${today}`
+          )
+        );
+
+      for (const trade of closedTrades) {
+        const state = this.instrumentStates.get(trade.instrument);
+        if (!state) continue;
+        state.todayTrades++;
+        if ((trade.pnl ?? 0) < 0) {
+          if (trade.direction === "long") state.longLosses++;
+          else if (trade.direction === "short") state.shortLosses++;
+        }
+      }
+
+      logger.info(
+        { closedCount: closedTrades.length },
+        "Rebuilt per-instrument counters from today's closed trades"
+      );
+
+      // Find any open trades in the DB for today
       const openTrades = await db
         .select()
         .from(tradesTable)
@@ -259,13 +291,14 @@ class AgentController {
         );
 
         if (livePos && livePos.size !== 0) {
-          // Still open on broker — restore state
+          // Still open on broker — restore state (also count this trade toward today's cap)
           state.inPosition = true;
           state.positionDirection = livePos.size > 0 ? "long" : "short";
           state.positionQty = Math.abs(livePos.size);
           state.positionEntryPrice = trade.entryPrice;
           state.positionOpenedAt = trade.entryTime.toISOString();
           state.openTradeId = trade.id;
+          state.todayTrades++; // count this open trade toward the daily cap
           logger.info(
             { symbol: trade.instrument, tradeId: trade.id },
             "Restored open trade state from DB"
