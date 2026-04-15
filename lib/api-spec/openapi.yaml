@@ -3,13 +3,20 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: DTR Trading Agent API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: agent
+    description: Trading agent control and status
+  - name: trades
+    description: Trade history
+  - name: positions
+    description: Open positions
+
 paths:
   /healthz:
     get:
@@ -24,6 +31,124 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /agent/status:
+    get:
+      operationId: getAgentStatus
+      tags: [agent]
+      summary: Get agent status
+      description: Returns current agent state, session phase, and daily P&L
+      responses:
+        "200":
+          description: Agent status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentStatus"
+
+  /agent/instruments:
+    get:
+      operationId: getInstruments
+      tags: [agent]
+      summary: Get per-instrument status
+      description: Returns live status for each of the 4 trading instruments
+      responses:
+        "200":
+          description: List of instrument statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InstrumentStatus"
+
+  /agent/start:
+    post:
+      operationId: startAgent
+      tags: [agent]
+      summary: Start the trading agent
+      responses:
+        "200":
+          description: Agent started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentActionResult"
+
+  /agent/stop:
+    post:
+      operationId: stopAgent
+      tags: [agent]
+      summary: Stop the trading agent
+      responses:
+        "200":
+          description: Agent stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentActionResult"
+
+  /trades:
+    get:
+      operationId: getTrades
+      tags: [trades]
+      summary: Get trade history
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: instrument
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: date
+          in: query
+          description: Filter by date (YYYY-MM-DD)
+          schema:
+            type: ["string", "null"]
+      responses:
+        "200":
+          description: Paginated trade list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradesPage"
+
+  /positions:
+    get:
+      operationId: getPositions
+      tags: [positions]
+      summary: Get open positions
+      responses:
+        "200":
+          description: List of open positions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Position"
+
+  /agent/daily-summary:
+    get:
+      operationId: getDailySummary
+      tags: [agent]
+      summary: Get today's trading summary
+      responses:
+        "200":
+          description: Daily summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailySummary"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +159,220 @@ components:
       required:
         - status
 
+    AgentStatus:
+      type: object
+      properties:
+        running:
+          type: boolean
+        sessionPhase:
+          type: string
+          enum: [idle, london_range, london_entry, ny_range, ny_entry, eod_flat, daily_limit_hit]
+        dailyPnl:
+          type: number
+        dailyLossLimit:
+          type: number
+        dailyProfitTarget:
+          type: number
+        tradeCount:
+          type: integer
+        lastUpdated:
+          type: string
+        authenticatedWithProjectX:
+          type: boolean
+        errorMessage:
+          type: ["string", "null"]
+      required:
+        - running
+        - sessionPhase
+        - dailyPnl
+        - dailyLossLimit
+        - dailyProfitTarget
+        - tradeCount
+        - lastUpdated
+        - authenticatedWithProjectX
+        - errorMessage
+
+    InstrumentStatus:
+      type: object
+      properties:
+        symbol:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        position:
+          type: ["string", "null"]
+          description: "long, short, or null"
+        positionSize:
+          type: integer
+        entryPrice:
+          type: ["number", "null"]
+        unrealizedPnl:
+          type: ["number", "null"]
+        todayPnl:
+          type: number
+        todayTrades:
+          type: integer
+        longLosses:
+          type: integer
+        shortLosses:
+          type: integer
+        rangeHigh:
+          type: ["number", "null"]
+        rangeLow:
+          type: ["number", "null"]
+        lastPrice:
+          type: ["number", "null"]
+      required:
+        - symbol
+        - name
+        - enabled
+        - position
+        - positionSize
+        - entryPrice
+        - unrealizedPnl
+        - todayPnl
+        - todayTrades
+        - longLosses
+        - shortLosses
+        - rangeHigh
+        - rangeLow
+        - lastPrice
+
+    Trade:
+      type: object
+      properties:
+        id:
+          type: integer
+        instrument:
+          type: string
+        direction:
+          type: string
+          enum: [long, short]
+        entryPrice:
+          type: number
+        exitPrice:
+          type: ["number", "null"]
+        qty:
+          type: integer
+        pnl:
+          type: ["number", "null"]
+        session:
+          type: string
+          enum: [london, ny]
+        status:
+          type: string
+          enum: [open, closed, cancelled]
+        entryTime:
+          type: string
+        exitTime:
+          type: ["string", "null"]
+        stopPrice:
+          type: ["number", "null"]
+        tp1Price:
+          type: ["number", "null"]
+        tp2Price:
+          type: ["number", "null"]
+      required:
+        - id
+        - instrument
+        - direction
+        - entryPrice
+        - exitPrice
+        - qty
+        - pnl
+        - session
+        - status
+        - entryTime
+        - exitTime
+        - stopPrice
+        - tp1Price
+        - tp2Price
+
+    TradesPage:
+      type: object
+      properties:
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trade"
+        total:
+          type: integer
+        page:
+          type: integer
+        pageSize:
+          type: integer
+      required:
+        - trades
+        - total
+        - page
+        - pageSize
+
+    Position:
+      type: object
+      properties:
+        instrument:
+          type: string
+        direction:
+          type: string
+          enum: [long, short]
+        size:
+          type: integer
+        entryPrice:
+          type: number
+        currentPrice:
+          type: number
+        unrealizedPnl:
+          type: number
+        openedAt:
+          type: string
+      required:
+        - instrument
+        - direction
+        - size
+        - entryPrice
+        - currentPrice
+        - unrealizedPnl
+        - openedAt
+
+    DailySummary:
+      type: object
+      properties:
+        date:
+          type: string
+        totalPnl:
+          type: number
+        tradeCount:
+          type: integer
+        winCount:
+          type: integer
+        lossCount:
+          type: integer
+        status:
+          type: string
+          enum: [active, profit_target_hit, loss_limit_hit, ended]
+        londonPnl:
+          type: number
+        nyPnl:
+          type: number
+      required:
+        - date
+        - totalPnl
+        - tradeCount
+        - winCount
+        - lossCount
+        - status
+        - londonPnl
+        - nyPnl
+
+    AgentActionResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+        - message
