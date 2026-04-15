@@ -137,34 +137,55 @@ export function getInstrumentConfig(symbol: string): InstrumentConfig | null {
 }
 
 /**
- * Parse time string "HH:MM" and create a Date for today in NY timezone
+ * Convert an America/New_York "YYYY-MM-DD HH:MM" wall-clock time to a UTC Date.
+ * Uses the Intl.DateTimeFormat offset method which is DST-safe on any host timezone.
  */
-export function todayAtNY(timeStr: string): Date {
+export function nyWallClockToUtc(nyDateStr: string, timeStr: string): Date {
   const [h, m] = timeStr.split(":").map(Number);
-  const now = new Date();
-  // Get current date in NY
-  const nyDateStr = now.toLocaleDateString("en-US", {
+  const [year, month, day] = nyDateStr.split("-").map(Number);
+
+  // Binary-search for the UTC instant whose NY wall-clock time equals the target.
+  // Start with a rough estimate: UTC = target - 5h (EST, non-DST).
+  const roughUtcMs = Date.UTC(year, month - 1, day, h + 5, m, 0);
+  const roughDate = new Date(roughUtcMs);
+
+  // Read back what NY wall-clock the rough estimate maps to
+  const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
   });
-  const [month, day, year] = nyDateStr.split("/").map(Number);
-  // Create date in NY timezone
-  const nyDate = new Date(
-    Date.UTC(year, month - 1, day, h, m, 0) +
-      getNYOffsetMs(new Date(Date.UTC(year, month - 1, day, h, m, 0)))
+  const parts = fmt.formatToParts(roughDate);
+  const partMap = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  const roughNYMs = Date.UTC(
+    Number(partMap.year),
+    Number(partMap.month) - 1,
+    Number(partMap.day),
+    Number(partMap.hour) === 24 ? 0 : Number(partMap.hour),
+    Number(partMap.minute),
+    Number(partMap.second)
   );
-  return nyDate;
+
+  // The UTC offset in ms at this moment (positive = NY is behind UTC)
+  const offsetMs = roughNYMs - roughDate.getTime();
+
+  // True UTC = target NY wall-clock - NY offset
+  const targetNYMs = Date.UTC(year, month - 1, day, h, m, 0);
+  return new Date(targetNYMs - offsetMs);
 }
 
 /**
- * Get NY timezone offset in ms for a given UTC date
+ * Parse time string "HH:MM" and create a Date for today in NY timezone.
+ * Returns a proper UTC Date that represents that NY wall-clock moment today.
  */
-function getNYOffsetMs(utcDate: Date): number {
-  const nyStr = utcDate.toLocaleString("en-US", { timeZone: "America/New_York" });
-  const nyDate = new Date(nyStr + " UTC"); // trick to get local NY time as UTC
-  return utcDate.getTime() - nyDate.getTime();
+export function todayAtNY(timeStr: string): Date {
+  const nyDateStr = currentNYDate();
+  return nyWallClockToUtc(nyDateStr, timeStr);
 }
 
 /**

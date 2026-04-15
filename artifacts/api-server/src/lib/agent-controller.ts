@@ -10,7 +10,7 @@
 
 import { logger } from "./logger";
 import { getProjectXClient, type ProjectXClient, type OpenPosition } from "./projectx-client";
-import { TRADING_CONFIG, isInTimeWindow, currentNYDate } from "./trading-config";
+import { TRADING_CONFIG, isInTimeWindow, currentNYDate, todayAtNY } from "./trading-config";
 import {
   computeRange,
   checkEntrySignal,
@@ -74,6 +74,8 @@ class AgentController {
   private currentDate: string = "";
   // Cache open positions from ProjectX
   private openPositionsCache: OpenPosition[] = [];
+  // Previous position cache snapshot for detecting closes and reading realizedPnl
+  private previousPositionsCache: OpenPosition[] = [];
   private lastPositionFetch = 0;
 
   constructor() {
@@ -107,6 +109,9 @@ class AgentController {
 
     // Resolve contract IDs for all instruments
     await this.resolveContractIds();
+
+    // Reconcile in-flight trades and positions from DB + broker on startup
+    await this.reconcileOnStartup();
 
     this.running = true;
     this.errorMessage = null;
@@ -218,6 +223,80 @@ class AgentController {
     }
   }
 
+  /**
+   * On startup, reconcile any open trades in the DB against live broker positions.
+   * This ensures state is consistent if the process restarted mid-trade.
+   */
+  private async reconcileOnStartup(): Promise<void> {
+    if (!this.client) return;
+    logger.info("Reconciling positions on startup");
+
+    try {
+      // Fetch live positions from broker
+      const livePositions = await this.client.getOpenPositions();
+      this.openPositionsCache = livePositions;
+      this.previousPositionsCache = livePositions;
+      this.lastPositionFetch = Date.now();
+
+      // Find any open trades in the DB for today
+      const today = this.currentDate;
+      const openTrades = await db
+        .select()
+        .from(tradesTable)
+        .where(
+          and(
+            eq(tradesTable.status, "open"),
+            sql`date(entry_time) = ${today}`
+          )
+        );
+
+      for (const trade of openTrades) {
+        const state = this.instrumentStates.get(trade.instrument);
+        if (!state || !state.contractId) continue;
+
+        const livePos = livePositions.find(
+          (p) => Number(p.contractId) === state.contractId
+        );
+
+        if (livePos && livePos.size !== 0) {
+          // Still open on broker — restore state
+          state.inPosition = true;
+          state.positionDirection = livePos.size > 0 ? "long" : "short";
+          state.positionQty = Math.abs(livePos.size);
+          state.positionEntryPrice = trade.entryPrice;
+          state.positionOpenedAt = trade.entryTime.toISOString();
+          state.openTradeId = trade.id;
+          logger.info(
+            { symbol: trade.instrument, tradeId: trade.id },
+            "Restored open trade state from DB"
+          );
+        } else {
+          // Position closed on broker but not in DB — mark it closed with last price
+          const pnl = livePos?.realizedPnl ?? 0;
+          await db
+            .update(tradesTable)
+            .set({
+              status: "closed",
+              exitPrice: trade.entryPrice,
+              exitTime: new Date(),
+              pnl,
+            })
+            .where(eq(tradesTable.id, trade.id));
+
+          this.dailyPnl += pnl;
+          logger.info(
+            { symbol: trade.instrument, tradeId: trade.id, pnl },
+            "Closed orphaned trade found on startup"
+          );
+        }
+      }
+
+      logger.info("Startup reconciliation complete");
+    } catch (err) {
+      logger.error({ err }, "Error during startup reconciliation");
+    }
+  }
+
   private async loadDailySummary(): Promise<void> {
     const today = currentNYDate();
     this.currentDate = today;
@@ -318,6 +397,7 @@ class AgentController {
     const now = Date.now();
     if (now - this.lastPositionFetch > 60_000) {
       try {
+        this.previousPositionsCache = this.openPositionsCache;
         this.openPositionsCache = await this.client.getOpenPositions();
         this.lastPositionFetch = now;
         await this.syncPositionStates();
@@ -360,20 +440,9 @@ class AgentController {
       if (!state.contractId) continue;
 
       try {
-        const startTime = new Date();
-        const [startH, startM] = rangeStart.split(":").map(Number);
-        const [endH, endM] = rangeEnd.split(":").map(Number);
-
-        // Use today's date in NY
-        const todayNY = currentNYDate();
-        const startDate = new Date(`${todayNY}T${String(startH).padStart(2, "0")}:${String(startM).padStart(2, "0")}:00`);
-        const endDate = new Date(`${todayNY}T${String(endH).padStart(2, "0")}:${String(endM).padStart(2, "0")}:00`);
-        // Adjust for timezone offset
-        const offset = startDate.getTimezoneOffset() * 60_000;
-        const startUtc = new Date(startDate.getTime() - offset);
-        const endUtc = new Date(endDate.getTime() - offset);
-
-        void startTime;
+        // Convert NY wall-clock session boundaries to UTC (DST-safe)
+        const startUtc = todayAtNY(rangeStart);
+        const endUtc = todayAtNY(rangeEnd);
 
         const bars = await this.client.getBars(state.contractId, startUtc, endUtc);
         const rangeData = computeRange(bars);
@@ -544,45 +613,59 @@ class AgentController {
       } else if (!pos || pos.size === 0) {
         // Position was closed externally (hit SL or TP)
         if (state.inPosition && state.openTradeId) {
-          // Find the actual exit
-          const lastPrice = state.lastPrice;
+          // Use ProjectX realizedPnl from previous position snapshot if available,
+          // otherwise fall back to heuristic calculation from last price.
+          const prevPos = this.previousPositionsCache.find(
+            (p) => Number(p.contractId) === state.contractId
+          );
           const config = TRADING_CONFIG.instruments[symbol];
+          let pnl: number;
+          let exitPrice: number;
 
-          if (lastPrice && state.positionDirection && state.positionEntryPrice && config) {
-            const pnl = calculatePnl(
+          if (prevPos && prevPos.realizedPnl !== undefined && prevPos.realizedPnl !== 0) {
+            // Use the broker's realized P&L directly
+            pnl = prevPos.realizedPnl;
+            exitPrice = state.lastPrice ?? state.positionEntryPrice ?? 0;
+          } else if (state.lastPrice && state.positionDirection && state.positionEntryPrice && config) {
+            // Fallback: compute from price diff
+            exitPrice = state.lastPrice;
+            pnl = calculatePnl(
               state.positionDirection,
               state.positionEntryPrice,
-              lastPrice,
+              exitPrice,
               state.positionQty,
               config.pointValue
             );
-
-            this.dailyPnl += pnl;
-
-            if (pnl < 0) {
-              if (state.positionDirection === "long") state.longLosses++;
-              else state.shortLosses++;
-            }
-
-            await db
-              .update(tradesTable)
-              .set({
-                status: "closed",
-                exitPrice: lastPrice,
-                exitTime: new Date(),
-                pnl,
-              })
-              .where(
-                and(
-                  eq(tradesTable.id, state.openTradeId),
-                  eq(tradesTable.status, "open")
-                )
-              );
-
-            await this.updateDailySummary();
-
-            logger.info({ symbol, pnl, direction: state.positionDirection }, "Trade closed");
+          } else {
+            exitPrice = state.positionEntryPrice ?? 0;
+            pnl = 0;
           }
+
+          this.dailyPnl += pnl;
+
+          if (pnl < 0) {
+            if (state.positionDirection === "long") state.longLosses++;
+            else state.shortLosses++;
+          }
+
+          await db
+            .update(tradesTable)
+            .set({
+              status: "closed",
+              exitPrice,
+              exitTime: new Date(),
+              pnl,
+            })
+            .where(
+              and(
+                eq(tradesTable.id, state.openTradeId),
+                eq(tradesTable.status, "open")
+              )
+            );
+
+          await this.updateDailySummary();
+
+          logger.info({ symbol, pnl, exitPrice, direction: state.positionDirection }, "Trade closed");
 
           state.inPosition = false;
           state.positionDirection = null;
