@@ -34,4 +34,3 @@ externalPort = 3000
 [userenv]
 
 [userenv.shared]
-AGENT_CONTROL_SECRET = "78154fb6-f6e5-4eb4-bf66-b382b7355bd7"

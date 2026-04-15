@@ -6,6 +6,30 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 
+// Build list of trusted origins from the Replit-managed REPLIT_DOMAINS env var.
+// Only same-deployment origins are allowed to make cross-origin requests.
+const replitDomains = (process.env.REPLIT_DOMAINS ?? "").split(",").filter(Boolean);
+const trustedOrigins = new Set<string>(
+  replitDomains.flatMap((d) => [`https://${d.trim()}`, `http://${d.trim()}`])
+);
+
+function corsOriginFn(
+  origin: string | undefined,
+  cb: (err: Error | null, allow?: boolean) => void
+): void {
+  // Allow same-origin / no-origin (server-to-server, curl from localhost)
+  if (!origin) {
+    cb(null, true);
+    return;
+  }
+  if (trustedOrigins.size > 0 && trustedOrigins.has(origin)) {
+    cb(null, true);
+    return;
+  }
+  // Reject unknown cross-origin requests
+  cb(new Error(`CORS: Origin '${origin}' is not allowed`));
+}
+
 app.use(
   pinoHttp({
     logger,
@@ -25,7 +49,7 @@ app.use(
     },
   }),
 );
-app.use(cors());
+app.use(cors({ origin: corsOriginFn, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

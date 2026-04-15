@@ -18,45 +18,36 @@ const router: IRouter = Router();
  * Middleware that protects agent control endpoints (start/stop) via two paths:
  *
  * 1. Same-origin / Replit-proxied requests: allowed when the Origin header
- *    matches one of the trusted REPLIT_DOMAINS (set by the platform). This
- *    covers the dashboard calling from a browser on the same Replit deployment.
+ *    exactly matches one of the trusted REPLIT_DOMAINS origins.
+ *    This covers the dashboard calling from the same Replit deployment.
+ *    No browser-side secret is used or exposed.
  *
- * 2. External script/API access: requires the X-Agent-Key header to match
- *    the AGENT_CONTROL_SECRET env var.  If AGENT_CONTROL_SECRET is unset and
- *    the request is not same-origin, the server rejects it (fail-closed).
- *
- * The secret is NEVER sent to the browser; VITE_AGENT_CONTROL_SECRET is not used.
+ * 2. External script/API access: requires X-Agent-Key header to match
+ *    AGENT_CONTROL_SECRET (set as a Replit Secret, not in .replit).
+ *    If the secret is unset and the request is not same-origin, it is
+ *    rejected (fail-closed).
  */
 function requireAgentKey(req: Request, res: Response, next: NextFunction): void {
   const origin = req.headers["origin"] as string | undefined;
-  const referer = req.headers["referer"] as string | undefined;
 
-  // Check if the request comes from a trusted Replit domain
+  // Build trusted-origin set from REPLIT_DOMAINS (exact match only, no substrings)
   const replitDomains = (process.env.REPLIT_DOMAINS ?? "").split(",").filter(Boolean);
-  const isSameOrigin =
-    replitDomains.length > 0 &&
-    (origin ?? referer ?? "")
-      .split(/[/?#]/)[2]
-      ?.split(".")
-      .slice(-2)
-      .join(".") === "replit.app" ||
-    replitDomains.some(
-      (d) =>
-        (origin && origin.includes(d)) ||
-        (referer && referer.includes(d))
-    );
+  const trustedOrigins = new Set<string>(
+    replitDomains.flatMap((d) => [`https://${d.trim()}`, `http://${d.trim()}`])
+  );
 
-  if (isSameOrigin) {
+  // Allow requests from the same Replit deployment (exact origin match)
+  if (origin && trustedOrigins.size > 0 && trustedOrigins.has(origin)) {
     next();
     return;
   }
 
-  // Fall back to secret-based auth for external access
+  // Fall back to secret-based auth for external / no-origin requests
   const secret = process.env.AGENT_CONTROL_SECRET;
   if (!secret) {
     logger.error(
-      { path: req.path, origin, referer },
-      "AGENT_CONTROL_SECRET is not set and request is not same-origin — rejecting"
+      { path: req.path, origin },
+      "AGENT_CONTROL_SECRET is not set and request is not trusted-origin — rejecting"
     );
     res.status(503).json({
       error:
