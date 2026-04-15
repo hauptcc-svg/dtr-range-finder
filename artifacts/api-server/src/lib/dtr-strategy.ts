@@ -106,9 +106,9 @@ export function checkEntrySignal(
 
   const { high, low, width } = rangeData;
 
-  // Check for long breakout above range high
+  // Check for long breakout above range high — requires bullish bias
   if (
-    rangeData.bias !== "bearish" &&
+    rangeData.bias === "bullish" &&
     currentPrice > high &&
     state.longLosses < config.maxLossesPerDirection
   ) {
@@ -128,9 +128,9 @@ export function checkEntrySignal(
     };
   }
 
-  // Check for short breakout below range low
+  // Check for short breakout below range low — requires bearish bias
   if (
-    rangeData.bias !== "bullish" &&
+    rangeData.bias === "bearish" &&
     currentPrice < low &&
     state.shortLosses < config.maxLossesPerDirection
   ) {

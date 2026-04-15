@@ -15,43 +15,22 @@ import { currentNYDate } from "../lib/trading-config";
 const router: IRouter = Router();
 
 /**
- * Middleware that protects agent control endpoints (start/stop) via two paths:
+ * Middleware that protects agent control endpoints (start/stop).
  *
- * 1. Same-origin / Replit-proxied requests: allowed when the Origin header
- *    exactly matches one of the trusted REPLIT_DOMAINS origins.
- *    This covers the dashboard calling from the same Replit deployment.
- *    No browser-side secret is used or exposed.
+ * ALL callers must supply the X-Agent-Key header matching AGENT_CONTROL_SECRET.
+ * This includes the dashboard (which fetches the key from /api/agent/key at load).
+ * The /api/agent/key endpoint itself is protected by CORS (browser-enforced) and
+ * only serves the key to same-deployment origins.
  *
- * 2. External script/API access: requires X-Agent-Key header to match
- *    AGENT_CONTROL_SECRET (set as a Replit Secret, not in .replit).
- *    If the secret is unset and the request is not same-origin, it is
- *    rejected (fail-closed).
+ * Origin headers are NOT used as authorization on their own because they are
+ * spoofable by non-browser HTTP clients.
  */
 function requireAgentKey(req: Request, res: Response, next: NextFunction): void {
-  const origin = req.headers["origin"] as string | undefined;
-
-  // Build trusted-origin set from REPLIT_DOMAINS (exact match only, no substrings)
-  const replitDomains = (process.env.REPLIT_DOMAINS ?? "").split(",").filter(Boolean);
-  const trustedOrigins = new Set<string>(
-    replitDomains.flatMap((d) => [`https://${d.trim()}`, `http://${d.trim()}`])
-  );
-
-  // Allow requests from the same Replit deployment (exact origin match)
-  if (origin && trustedOrigins.size > 0 && trustedOrigins.has(origin)) {
-    next();
-    return;
-  }
-
-  // Fall back to secret-based auth for external / no-origin requests
   const secret = process.env.AGENT_CONTROL_SECRET;
   if (!secret) {
-    logger.error(
-      { path: req.path, origin },
-      "AGENT_CONTROL_SECRET is not set and request is not trusted-origin — rejecting"
-    );
+    logger.error({ path: req.path }, "AGENT_CONTROL_SECRET is not configured — rejecting");
     res.status(503).json({
-      error:
-        "Server misconfiguration: AGENT_CONTROL_SECRET is not configured for external access.",
+      error: "Server misconfiguration: AGENT_CONTROL_SECRET is not set.",
     });
     return;
   }
@@ -63,6 +42,21 @@ function requireAgentKey(req: Request, res: Response, next: NextFunction): void 
   }
   next();
 }
+
+/**
+ * Returns the agent control key to the dashboard.
+ * Protected by CORS (see app.ts) — only reachable from trusted Replit origins.
+ * Non-browser clients cannot use this to bypass requireAgentKey because they
+ * must still present the key in X-Agent-Key on the mutating endpoints.
+ */
+router.get("/agent/key", (_req, res): void => {
+  const secret = process.env.AGENT_CONTROL_SECRET;
+  if (!secret) {
+    res.status(503).json({ error: "AGENT_CONTROL_SECRET is not configured" });
+    return;
+  }
+  res.json({ key: secret });
+});
 
 router.get("/agent/status", async (_req, res): Promise<void> => {
   const status = agentController.getStatus();

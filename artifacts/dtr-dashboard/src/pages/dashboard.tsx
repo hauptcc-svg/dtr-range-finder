@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { 
   useGetAgentStatus, 
   useGetInstruments, 
@@ -20,7 +20,20 @@ import { formatSessionPhase, formatCurrency } from "@/lib/format";
 
 export function Dashboard() {
   const queryClient = useQueryClient();
-  
+
+  // Fetch the agent control key from the server at load time.
+  // The /api/agent/key endpoint is protected by CORS — browsers can only
+  // reach it from the same Replit deployment origin.
+  const { data: keyData } = useQuery<{ key: string }>({
+    queryKey: ["agentKey"],
+    queryFn: () => fetch("/api/agent/key").then((r) => r.json()),
+    staleTime: Infinity,
+    retry: 3,
+  });
+  const agentKeyHeader: Record<string, string> = keyData?.key
+    ? { "x-agent-key": keyData.key }
+    : {};
+
   const { data: agentStatus, isLoading: isLoadingStatus } = useGetAgentStatus({
     query: { queryKey: getGetAgentStatusQueryKey(), refetchInterval: 3000 }
   });
@@ -33,8 +46,8 @@ export function Dashboard() {
     query: { queryKey: getGetDailySummaryQueryKey(), refetchInterval: 5000 }
   });
 
-  const startAgent = useStartAgent();
-  const stopAgent = useStopAgent();
+  const startAgent = useStartAgent({ request: { headers: agentKeyHeader } });
+  const stopAgent = useStopAgent({ request: { headers: agentKeyHeader } });
 
   const handleStart = () => {
     startAgent.mutate(undefined, {
