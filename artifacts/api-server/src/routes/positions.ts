@@ -6,7 +6,9 @@ import { TRADING_CONFIG } from "../lib/trading-config";
 const router: IRouter = Router();
 
 router.get("/positions", async (req, res): Promise<void> => {
-  const statuses = agentController.getInstrumentStatuses();
+  // Force-refresh broker positions then merge with agent state for accurate display.
+  // Falls back to cached in-memory state if the broker fetch fails or agent is not running.
+  const statuses = await agentController.getInstrumentStatusesWithFresh();
 
   const positions = statuses
     .filter((s) => s.position !== null && s.positionSize > 0)

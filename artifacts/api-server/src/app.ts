@@ -14,12 +14,20 @@ const trustedOrigins = new Set<string>(
   replitDomains.flatMap((d) => [`https://${d.trim()}`, `http://${d.trim()}`])
 );
 
+// In local dev (REPLIT_DOMAINS unset), allow localhost origins to avoid accidental lockout.
+const isLocalDev = replitDomains.length === 0;
+
 function corsOriginFn(
   origin: string | undefined,
   cb: (err: Error | null, allow?: boolean) => void
 ): void {
   // Allow same-origin / no-origin (server-to-server, curl from localhost)
   if (!origin) {
+    cb(null, true);
+    return;
+  }
+  // Local dev fallback: allow any localhost origin when REPLIT_DOMAINS is unset
+  if (isLocalDev && /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
     cb(null, true);
     return;
   }

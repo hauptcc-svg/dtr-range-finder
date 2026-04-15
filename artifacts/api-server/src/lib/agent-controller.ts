@@ -10,7 +10,7 @@
 
 import { logger } from "./logger";
 import { getProjectXClient, type ProjectXClient, type OpenPosition } from "./projectx-client";
-import { TRADING_CONFIG, isInTimeWindow, currentNYDate, todayAtNY } from "./trading-config";
+import { TRADING_CONFIG, isInTimeWindow, currentNYDate, currentNYDayOfWeek, todayAtNY } from "./trading-config";
 import {
   computeRange,
   checkEntrySignal,
@@ -203,6 +203,26 @@ class AgentController {
         lastPrice: state.lastPrice,
       };
     });
+  }
+
+  /**
+   * Returns instrument statuses with a fresh broker position fetch.
+   * Used by the /positions endpoint to avoid serving stale cache data.
+   * Falls back to cached data when the agent is not running or fetch fails.
+   */
+  async getInstrumentStatusesWithFresh(): Promise<InstrumentStatusData[]> {
+    if (this.client && this.running) {
+      try {
+        this.previousPositionsCache = this.openPositionsCache;
+        this.openPositionsCache = await this.client.getOpenPositions();
+        this.lastPositionFetch = Date.now();
+        // Sync position states based on fresh data
+        await this.syncPositionStates();
+      } catch (err) {
+        logger.warn({ err }, "Failed to fetch fresh positions for /positions endpoint — using cache");
+      }
+    }
+    return this.getInstrumentStatuses();
   }
 
   private async resolveContractIds(): Promise<void> {
@@ -403,6 +423,16 @@ class AgentController {
     await this.checkDayRollover();
 
     this.lastUpdated = new Date().toISOString();
+
+    // Guard: do not process trading sessions on non-trading days (weekends)
+    const todayDow = currentNYDayOfWeek();
+    if (!TRADING_CONFIG.tradingDays.includes(todayDow)) {
+      if (this.sessionPhase !== "idle") {
+        logger.debug({ todayDow }, "Non-trading day — skipping session processing");
+        this.sessionPhase = "idle";
+      }
+      return;
+    }
 
     // Check daily limits
     if (this.dailyPnl <= -TRADING_CONFIG.dailyLossLimit) {
