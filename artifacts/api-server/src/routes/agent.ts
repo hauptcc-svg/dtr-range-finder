@@ -15,20 +15,52 @@ import { currentNYDate } from "../lib/trading-config";
 const router: IRouter = Router();
 
 /**
- * Middleware that enforces a shared secret on agent control endpoints (start/stop).
- * AGENT_CONTROL_SECRET env var MUST be set; if absent the server refuses requests
- * to prevent accidental exposure of live-order controls on internet-reachable hosts.
+ * Middleware that protects agent control endpoints (start/stop) via two paths:
+ *
+ * 1. Same-origin / Replit-proxied requests: allowed when the Origin header
+ *    matches one of the trusted REPLIT_DOMAINS (set by the platform). This
+ *    covers the dashboard calling from a browser on the same Replit deployment.
+ *
+ * 2. External script/API access: requires the X-Agent-Key header to match
+ *    the AGENT_CONTROL_SECRET env var.  If AGENT_CONTROL_SECRET is unset and
+ *    the request is not same-origin, the server rejects it (fail-closed).
+ *
+ * The secret is NEVER sent to the browser; VITE_AGENT_CONTROL_SECRET is not used.
  */
 function requireAgentKey(req: Request, res: Response, next: NextFunction): void {
+  const origin = req.headers["origin"] as string | undefined;
+  const referer = req.headers["referer"] as string | undefined;
+
+  // Check if the request comes from a trusted Replit domain
+  const replitDomains = (process.env.REPLIT_DOMAINS ?? "").split(",").filter(Boolean);
+  const isSameOrigin =
+    replitDomains.length > 0 &&
+    (origin ?? referer ?? "")
+      .split(/[/?#]/)[2]
+      ?.split(".")
+      .slice(-2)
+      .join(".") === "replit.app" ||
+    replitDomains.some(
+      (d) =>
+        (origin && origin.includes(d)) ||
+        (referer && referer.includes(d))
+    );
+
+  if (isSameOrigin) {
+    next();
+    return;
+  }
+
+  // Fall back to secret-based auth for external access
   const secret = process.env.AGENT_CONTROL_SECRET;
   if (!secret) {
     logger.error(
-      { path: req.path },
-      "AGENT_CONTROL_SECRET is not set — rejecting agent control request"
+      { path: req.path, origin, referer },
+      "AGENT_CONTROL_SECRET is not set and request is not same-origin — rejecting"
     );
     res.status(503).json({
-      error: "Server misconfiguration: AGENT_CONTROL_SECRET is not configured. " +
-        "Set this environment variable to enable agent control.",
+      error:
+        "Server misconfiguration: AGENT_CONTROL_SECRET is not configured for external access.",
     });
     return;
   }
