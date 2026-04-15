@@ -1,0 +1,517 @@
+# DTR Trading Agent - Complete Replit Deployment Guide
+
+## 📋 Step-by-Step Setup for Replit
+
+### Step 1: Create Replit Project
+1. Go to **replit.com**
+2. Click **"Create"** → **"New Repl"**
+3. Select **Python**
+4. Name it: `dtr-trading-agent`
+5. Click **"Create Repl"**
+
+---
+
+### Step 2: Upload Your Code Files
+
+In the Replit file explorer (left side), create these files:
+
+#### File 1: `main_multi_instrument.py`
+```python
+#!/usr/bin/env python3
+"""
+DTR Multi-Instrument Autonomous Trading Agent
+==============================================
+Trades all 4 Topstep instruments (MYMM26, MCLK26, MGCM26, MNQM26) simultaneously
+with shared daily loss limit ($200) and profit target ($1,400)
+
+Author: Claude (Anthropic)
+Deployment: Replit 24/7
+"""
+
+import asyncio
+import json
+import logging
+from datetime import datetime, date, time
+from typing import Optional, Dict, Any
+import pytz
+import os
+
+# Import your modules (make sure these files exist)
+# from dtr_strategy import DTRLondon2AMStrategy
+# from projectx_api import ProjectXAPI
+# from multi_instrument_manager import MultiInstrumentDTRManager
+# from logger_util import setup_logging
+# from multi_instrument_config import MULTI_INSTRUMENT_CONFIG
+
+# For now, simple placeholder
+print("DTR Trading Agent Starting...")
+print("=" * 80)
+print("DTR MULTI-INSTRUMENT AUTONOMOUS TRADING AGENT")
+print("=" * 80)
+print(f"Instruments: MYMM26, MCLK26, MGCM26, MNQM26")
+print(f"Session: 2 AM London (1:12 - 2:13 AM NY Range) + 9 AM NY (8:12 - 9:13 AM Range)")
+print(f"London Entry: 3:13 - 7:00 AM NY")
+print(f"NY Entry: 9:13 - 2:00 PM NY")
+print(f"Daily Limit: Loss -$200 / Profit +$1,400")
+print("=" * 80)
+print()
+
+# Get credentials from environment
+api_key = os.getenv("PROJECTX_API_KEY")
+username = os.getenv("PROJECTX_USERNAME")
+account_id = os.getenv("PROJECTX_ACCOUNT_ID")
+
+print(f"ProjectX Username: {username}")
+print(f"ProjectX Account ID: {account_id}")
+print(f"API Key: {api_key[:20]}..." if api_key else "API Key: NOT SET")
+print()
+
+# TODO: Implement full agent logic here
+# For now, this is a placeholder that logs the configuration
+
+async def main():
+    print("Agent running in PAPER TRADING mode (simulation only)")
+    print("Ready to trade 24/7")
+    
+    # Keep running forever
+    try:
+        while True:
+            await asyncio.sleep(60)
+    except KeyboardInterrupt:
+        print("Agent stopped by user")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### File 2: `multi_instrument_config.py`
+```python
+"""
+Multi-Instrument DTR 2 AM Trading Configuration
+===============================================
+Trade all four Topstep instruments simultaneously
+
+Instruments:
+  MYMM26 - Mini Yen Futures
+  MCLK26 - Micro Crude Oil Futures
+  MGCM26 - Micro Gold Futures
+  MNQM26 - Micro NQ (Nasdaq 100)
+"""
+
+MULTI_INSTRUMENT_CONFIG = {
+    "timezone": "America/New_York",
+    
+    "daily_loss_limit": 200.0,
+    "daily_profit_target": 1400.0,
+    "trading_days": [0, 1, 2, 3, 4],
+    
+    "MYMM26": {
+        "enabled": True,
+        "name": "Mini Yen",
+        "contract": "MYMM26",
+        "qty": 2,
+        "tp1_qty": 1,
+        
+        # London Session
+        "london_range_start": "01:12",
+        "london_range_end": "02:13",
+        "london_entry_start": "03:13",
+        "london_entry_end": "07:00",
+        
+        # NY Session
+        "ny_range_start": "08:12",
+        "ny_range_end": "09:13",
+        "ny_entry_start": "09:13",
+        "ny_entry_end": "14:00",
+        
+        "bias_candle_atr_mult": 0.5,
+        "sl_atr_buffer": 0.0,
+        "tp_mode": "Range Target",
+        "max_trades_per_day": 4,
+        "max_losses_per_direction": 2,
+        "point_value": 12.50,
+        "min_tick": 0.01,
+    },
+    
+    "MCLK26": {
+        "enabled": True,
+        "name": "Micro Crude Oil",
+        "contract": "MCLK26",
+        "qty": 2,
+        "tp1_qty": 1,
+        "london_range_start": "01:12",
+        "london_range_end": "02:13",
+        "london_entry_start": "03:13",
+        "london_entry_end": "07:00",
+        "ny_range_start": "08:12",
+        "ny_range_end": "09:13",
+        "ny_entry_start": "09:13",
+        "ny_entry_end": "14:00",
+        "bias_candle_atr_mult": 0.5,
+        "sl_atr_buffer": 0.0,
+        "tp_mode": "Range Target",
+        "max_trades_per_day": 4,
+        "max_losses_per_direction": 2,
+        "point_value": 10.00,
+        "min_tick": 0.01,
+    },
+    
+    "MGCM26": {
+        "enabled": True,
+        "name": "Micro Gold",
+        "contract": "MGCM26",
+        "qty": 2,
+        "tp1_qty": 1,
+        "london_range_start": "01:12",
+        "london_range_end": "02:13",
+        "london_entry_start": "03:13",
+        "london_entry_end": "07:00",
+        "ny_range_start": "08:12",
+        "ny_range_end": "09:13",
+        "ny_entry_start": "09:13",
+        "ny_entry_end": "14:00",
+        "bias_candle_atr_mult": 0.5,
+        "sl_atr_buffer": 0.0,
+        "tp_mode": "Range Target",
+        "max_trades_per_day": 4,
+        "max_losses_per_direction": 2,
+        "point_value": 10.00,
+        "min_tick": 0.10,
+    },
+    
+    "MNQM26": {
+        "enabled": True,
+        "name": "Micro NQ (Nasdaq 100)",
+        "contract": "MNQM26",
+        "qty": 3,
+        "tp1_qty": 1,
+        "london_range_start": "01:12",
+        "london_range_end": "02:13",
+        "london_entry_start": "03:13",
+        "london_entry_end": "07:00",
+        "ny_range_start": "08:12",
+        "ny_range_end": "09:13",
+        "ny_entry_start": "09:13",
+        "ny_entry_end": "14:00",
+        "bias_candle_atr_mult": 0.5,
+        "sl_atr_buffer": 0.0,
+        "tp_mode": "Range Target",
+        "max_trades_per_day": 4,
+        "max_losses_per_direction": 2,
+        "point_value": 20.00,
+        "min_tick": 0.25,
+    },
+    
+    "projectx": {
+        "api_key": None,
+        "username": None,
+        "account_id": None,
+        "base_url": "https://api.projectx.com",
+        "timeout": 30,
+    },
+    
+    "market_data": {
+        "source": "projectx",
+        "timeframe": "1m",
+        "history_bars": 500,
+        "stream_all_instruments": True,
+    },
+    
+    "logging": {
+        "level": "INFO",
+        "log_dir": "logs",
+        "file_retention_days": 30,
+    },
+}
+```
+
+#### File 3: `requirements.txt`
+```
+aiohttp==3.9.1
+python-dateutil==2.8.2
+pytz==2023.3
+python-dotenv==1.0.0
+requests==2.31.0
+flask==2.3.0
+```
+
+#### File 4: `.env` (Replit Secrets - see Step 3)
+(Don't create this as a file - use Replit Secrets instead)
+
+---
+
+### Step 3: Add Secrets (Credentials)
+
+1. Click the **"Secrets"** button (lock icon) in bottom left
+2. Add these secrets:
+
+```
+PROJECTX_API_KEY = ECuML3xdHMOlHEwYp5gyz3hLwxpDdScvyatCCr3L6Zc=
+PROJECTX_USERNAME = hauptcc@gmail.com
+PROJECTX_ACCOUNT_ID = 29127
+LOG_LEVEL = INFO
+TRADING_MODE = paper
+```
+
+Each one: click **"Add new secret"**, paste the key and value
+
+---
+
+### Step 4: Install Dependencies
+
+Click the **Shell** tab at the bottom, then run:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+### Step 5: Create Keep-Alive Script
+
+Create new file: `keep_alive.py`
+
+```python
+"""
+Keep Replit Running 24/7
+Prevents Replit from sleeping due to inactivity
+"""
+
+from flask import Flask
+import threading
+import time
+from urllib import request
+import os
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ DTR Trading Agent is Running"
+
+@app.route('/health')
+def health():
+    return {"status": "healthy", "timestamp": time.time()}
+
+def run_flask():
+    """Run Flask server on port 8080"""
+    try:
+        app.run(host='0.0.0.0', port=8080, debug=False)
+    except Exception as e:
+        print(f"Flask error: {e}")
+
+def keep_alive():
+    """Ping the Replit URL every 5 minutes to prevent sleeping"""
+    replit_url = os.getenv("REPLIT_URL", "https://dtr-trading-agent.repl.co")
+    
+    while True:
+        try:
+            request.urlopen(replit_url, timeout=5)
+            print(f"✓ Keep-alive ping sent to {replit_url}")
+        except Exception as e:
+            print(f"Keep-alive error: {e}")
+        
+        time.sleep(300)  # Ping every 5 minutes
+
+def start_background_threads():
+    """Start Flask and keep-alive in background threads"""
+    
+    # Start Flask server
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print("✓ Flask server started on port 8080")
+    
+    # Start keep-alive pinger
+    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_alive_thread.start()
+    print("✓ Keep-alive thread started")
+
+if __name__ == "__main__":
+    start_background_threads()
+    
+    # Keep main thread alive
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Keep-alive script stopped")
+```
+
+---
+
+### Step 6: Create Main Entry Point
+
+Create new file: `main.py`
+
+```python
+"""
+DTR Trading Agent - Replit Entry Point
+Starts keep-alive + trading agent
+"""
+
+import os
+import sys
+import threading
+import time
+import asyncio
+
+# Start keep-alive in background
+from keep_alive import start_background_threads
+start_background_threads()
+
+print("\n" + "="*80)
+print("DTR MULTI-INSTRUMENT TRADING AGENT")
+print("="*80)
+print("✓ Keep-alive started")
+print("✓ Replit will stay awake 24/7")
+print()
+
+# Get config
+from multi_instrument_config import MULTI_INSTRUMENT_CONFIG
+
+username = os.getenv("PROJECTX_USERNAME")
+api_key = os.getenv("PROJECTX_API_KEY", "")[:20]
+account = os.getenv("PROJECTX_ACCOUNT_ID")
+
+print(f"ProjectX Account: {account}")
+print(f"Username: {username}")
+print(f"API Key: {api_key}...")
+print()
+
+print("Trading Configuration:")
+print(f"  London Session: 3:13 - 7:00 AM NY")
+print(f"  NY Session: 9:13 - 2:00 PM NY")
+print(f"  Daily Loss Limit: -$200")
+print(f"  Daily Profit Target: +$1,400")
+print()
+
+print("Instruments:")
+for symbol in ["MYMM26", "MCLK26", "MGCM26", "MNQM26"]:
+    config = MULTI_INSTRUMENT_CONFIG.get(symbol, {})
+    if config.get("enabled"):
+        print(f"  ✓ {symbol} ({config.get('name')})")
+print()
+
+print("Status: RUNNING 24/7 on Replit")
+print("Mode: PAPER TRADING (simulation)")
+print()
+print("="*80)
+
+# Keep running forever
+try:
+    while True:
+        time.sleep(60)
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Agent running...")
+except KeyboardInterrupt:
+    print("Agent stopped")
+```
+
+---
+
+### Step 7: Configure Replit to Run on Startup
+
+1. Click **".replit"** file (top left)
+2. Replace contents with:
+
+```toml
+run = "python main.py"
+```
+
+3. Click **Run** button (top center)
+
+---
+
+### Step 8: Monitor Logs
+
+In the **Console** tab at the bottom, you should see:
+
+```
+✓ Keep-alive started
+✓ Replit will stay awake 24/7
+
+ProjectX Account: 29127
+Username: hauptcc@gmail.com
+API Key: ECuML3xdHMOlHEwYp5gyz3hLwxpDdScvyatCCr3L6Zc=
+
+Trading Configuration:
+  London Session: 3:13 - 7:00 AM NY
+  NY Session: 9:13 - 2:00 PM NY
+  Daily Loss Limit: -$200
+  Daily Profit Target: +$1,400
+
+Instruments:
+  ✓ MYMM26 (Mini Yen)
+  ✓ MCLK26 (Micro Crude Oil)
+  ✓ MGCM26 (Micro Gold)
+  ✓ MNQM26 (Micro NQ (Nasdaq 100))
+
+Status: RUNNING 24/7 on Replit
+Mode: PAPER TRADING (simulation)
+
+✓ Keep-alive ping sent to https://dtr-trading-agent.repl.co
+```
+
+---
+
+## ✅ Verify It's Working
+
+1. Click the **"Webview"** tab (top right)
+2. You should see: **"✅ DTR Trading Agent is Running"**
+3. Go to `/health` in the URL bar
+4. You should see: `{"status": "healthy", "timestamp": 1234567890}`
+
+---
+
+## 🎯 What's Happening
+
+```
+Replit keeps your agent running 24/7 by:
+
+1. Flask server runs on port 8080
+2. Keep-alive script pings the URL every 5 minutes
+3. This prevents Replit from "sleeping" due to inactivity
+4. Trading agent stays active all day/night
+5. Ready to trade London 3:13-7:00 AM and NY 9:13-2:00 PM
+```
+
+---
+
+## 📊 Next Steps
+
+1. ✅ Set up Replit project
+2. ✅ Add files + secrets
+3. ✅ Install requirements
+4. ✅ Run `python main.py`
+5. ⏳ **Integrate full trading logic** (ProjectX API, DTR strategy, etc.)
+6. ⏳ **Test in paper trading mode**
+7. ⏳ **Switch to live trading** when confident
+
+---
+
+## 🚨 Important Notes
+
+- **This setup is a FOUNDATION** - full trading logic needs to be added
+- **Paper trading mode** - not executing real trades yet
+- **Keep Replit tab open** or set up a monitor to ensure it stays running
+- **Check logs daily** to verify agent is active
+- **Test for 1 week** in paper mode before going live
+
+---
+
+## 💬 Issues?
+
+If agent stops:
+```bash
+# Click Run button again
+# Or in console:
+python main.py
+```
+
+If keep-alive isn't working:
+1. Check Secrets are set correctly
+2. Verify Flask is running (should show on port 8080)
+3. Click the Webview tab to test
+
+---
+
+**Your DTR agent is now ready to run 24/7 on Replit!** 🚀
