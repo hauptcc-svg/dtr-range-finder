@@ -10,7 +10,7 @@ import {
   getGetInstrumentsQueryKey,
   getGetDailySummaryQueryKey,
 } from "@workspace/api-client-react";
-import { Play, Square, Activity, AlertCircle, KeyRound, LogOut } from "lucide-react";
+import { Play, Square, Activity, AlertCircle, KeyRound, LogOut, Brain, CheckCircle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -95,8 +95,19 @@ function ConnectModal({ onConnected }: { onConnected: () => void }) {
 // ---------------------------------------------------------------------------
 // Dashboard — main view, shown after authentication
 // ---------------------------------------------------------------------------
+interface ClaudeResult {
+  success: boolean;
+  message: string;
+  tradesPlaced: string[];
+  advice: {
+    summary: string;
+    decisions: Array<{ symbol: string; action: string; reasoning: string }>;
+  } | null;
+}
+
 export function Dashboard() {
   const queryClient = useQueryClient();
+  const [claudeResult, setClaudeResult] = useState<ClaudeResult | null>(null);
 
   // Check whether the current browser session is authenticated
   const {
@@ -137,6 +148,22 @@ export function Dashboard() {
   // Mutating hooks — credentials: "include" sends the HttpOnly session cookie
   const startAgent = useStartAgent({ request: { credentials: "include" } });
   const stopAgent = useStopAgent({ request: { credentials: "include" } });
+
+  const claudeTrade = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/agent/claude-trade", {
+        method: "POST",
+        credentials: "include",
+      });
+      const body = await res.json() as ClaudeResult;
+      return body;
+    },
+    onSuccess: (data) => {
+      setClaudeResult(data);
+      queryClient.invalidateQueries({ queryKey: getGetInstrumentsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetAgentStatusQueryKey() });
+    },
+  });
 
   const handleStart = () => {
     startAgent.mutate(undefined, {
@@ -228,6 +255,20 @@ export function Dashboard() {
                   HALT
                 </Button>
               </div>
+
+              {/* Claude Trade Now */}
+              <div className="w-full border-t border-border pt-4">
+                <Button
+                  variant="outline"
+                  size="lg"
+                  className="w-full font-mono font-bold border-primary/50 text-primary hover:bg-primary/10 hover:text-primary"
+                  disabled={!isAuthenticated || claudeTrade.isPending}
+                  onClick={() => { setClaudeResult(null); claudeTrade.mutate(); }}
+                >
+                  <Brain className="w-4 h-4 mr-2" />
+                  {claudeTrade.isPending ? "CLAUDE ANALYSING…" : "CLAUDE TRADE NOW"}
+                </Button>
+              </div>
               
               <div className="w-full flex justify-between items-center border-t border-border pt-4">
                 <span className="text-xs font-mono text-muted-foreground uppercase tracking-wider block">Session Phase</span>
@@ -304,6 +345,47 @@ export function Dashboard() {
           </Alert>
         )}
 
+        {/* Claude Trade Result */}
+        {claudeResult && (
+          <Card className={`bg-card border rounded-md ${claudeResult.success ? "border-primary/40" : "border-destructive/40"}`}>
+            <CardHeader className="pb-3 border-b border-border/50 flex flex-row items-center gap-2">
+              {claudeResult.success
+                ? <CheckCircle className="w-4 h-4 text-success" />
+                : <XCircle className="w-4 h-4 text-destructive" />}
+              <CardTitle className="text-sm font-mono tracking-tight uppercase">
+                Claude Analysis Result
+              </CardTitle>
+              <button
+                className="ml-auto text-muted-foreground hover:text-foreground text-xs font-mono"
+                onClick={() => setClaudeResult(null)}
+              >
+                ✕ dismiss
+              </button>
+            </CardHeader>
+            <CardContent className="pt-4 space-y-3">
+              <p className="text-sm font-mono text-foreground">{claudeResult.message}</p>
+              {claudeResult.advice && (
+                <>
+                  <p className="text-xs text-muted-foreground font-mono italic">{claudeResult.advice.summary}</p>
+                  <div className="grid gap-2">
+                    {claudeResult.advice.decisions.map((d) => (
+                      <div key={d.symbol} className="flex items-start gap-3 text-xs font-mono bg-muted/20 rounded px-3 py-2">
+                        <span className={`font-bold w-16 shrink-0 ${d.action === "skip" ? "text-muted-foreground" : d.action === "long" ? "text-success" : "text-destructive"}`}>
+                          {d.symbol}
+                        </span>
+                        <span className={`w-10 shrink-0 uppercase font-bold ${d.action === "skip" ? "text-muted-foreground" : d.action === "long" ? "text-success" : "text-destructive"}`}>
+                          {d.action}
+                        </span>
+                        <span className="text-muted-foreground">{d.reasoning}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Instruments Grid */}
         <div>
           <h2 className="text-sm font-mono font-bold tracking-widest text-muted-foreground uppercase mb-4 border-b border-border/50 pb-2">
@@ -311,7 +393,11 @@ export function Dashboard() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             {instruments.map(instrument => (
-              <InstrumentCard key={instrument.symbol} instrument={instrument} />
+              <InstrumentCard
+                key={instrument.symbol}
+                instrument={instrument}
+                isAuthenticated={isAuthenticated}
+              />
             ))}
           </div>
         </div>

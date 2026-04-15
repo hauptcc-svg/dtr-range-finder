@@ -234,4 +234,39 @@ router.post("/agent/stop", requireAgentKeyOrSession, async (_req, res): Promise<
   res.json(StopAgentResponse.parse(result));
 });
 
+// ---------------------------------------------------------------------------
+// POST /api/agent/instruments/:symbol/toggle
+// Enables or disables a specific instrument at runtime.
+// Body: { enabled: boolean }
+// ---------------------------------------------------------------------------
+router.post("/agent/instruments/:symbol/toggle", requireAgentKeyOrSession, (req: Request, res: Response): void => {
+  const symbol = (req.params as { symbol: string }).symbol.toUpperCase();
+  const body = req.body as Record<string, unknown>;
+  const enabled = body.enabled;
+
+  if (typeof enabled !== "boolean") {
+    res.status(400).json({ error: 'Body must include { "enabled": true | false }' });
+    return;
+  }
+
+  const result = agentController.toggleInstrument(symbol, enabled);
+  if (!result.success) {
+    res.status(404).json(result);
+    return;
+  }
+
+  logger.info({ symbol, enabled }, "Instrument toggled via API");
+  res.json(result);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/agent/claude-trade
+// Asks Claude to analyse the current DTR state and place trades immediately.
+// ---------------------------------------------------------------------------
+router.post("/agent/claude-trade", requireAgentKeyOrSession, async (_req, res): Promise<void> => {
+  logger.info("Claude Trade Now requested");
+  const result = await agentController.claudeTradeNow();
+  res.json(result);
+});
+
 export default router;

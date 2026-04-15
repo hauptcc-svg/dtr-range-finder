@@ -18,6 +18,7 @@ import {
   calculatePnl,
   type InstrumentState,
 } from "./dtr-strategy";
+import { getClaudeTradeAdvice, type ClaudeAdvice } from "./claude-advisor";
 import { db, tradesTable, dailySummaryTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 
@@ -77,12 +78,173 @@ class AgentController {
   // Previous position cache snapshot for detecting closes and reading realizedPnl
   private previousPositionsCache: OpenPosition[] = [];
   private lastPositionFetch = 0;
+  // Runtime enabled/disabled overrides per instrument (persists until process restart)
+  private instrumentEnabledOverrides: Map<string, boolean> = new Map();
 
   constructor() {
     // Initialize instrument states
     for (const symbol of Object.keys(TRADING_CONFIG.instruments)) {
       this.instrumentStates.set(symbol, createInstrumentState(symbol));
     }
+  }
+
+  /** Returns effective enabled state, honoring runtime overrides. */
+  isInstrumentEnabled(symbol: string): boolean {
+    if (this.instrumentEnabledOverrides.has(symbol)) {
+      return this.instrumentEnabledOverrides.get(symbol)!;
+    }
+    return TRADING_CONFIG.instruments[symbol]?.enabled ?? false;
+  }
+
+  /** Toggle an instrument on or off at runtime without restarting the agent. */
+  toggleInstrument(symbol: string, enabled: boolean): { success: boolean; message: string } {
+    if (!TRADING_CONFIG.instruments[symbol]) {
+      return { success: false, message: `Unknown instrument: ${symbol}` };
+    }
+    this.instrumentEnabledOverrides.set(symbol, enabled);
+    logger.info({ symbol, enabled }, "Instrument toggled");
+    return { success: true, message: `${symbol} ${enabled ? "enabled" : "disabled"}` };
+  }
+
+  /**
+   * Ask Claude to analyse the current DTR state for all enabled instruments
+   * and immediately place trades where it recommends.
+   * Does NOT require the agent to be running — fetches prices directly.
+   */
+  async claudeTradeNow(): Promise<{ success: boolean; advice: ClaudeAdvice | null; tradesPlaced: string[]; message: string }> {
+    if (!this.client) {
+      return { success: false, advice: null, tradesPlaced: [], message: "Agent is not running — start it first so prices are available." };
+    }
+
+    const eligibleInstruments = Array.from(this.instrumentStates.entries())
+      .filter(([symbol]) => this.isInstrumentEnabled(symbol))
+      .map(([symbol, state]) => ({
+        state,
+        config: TRADING_CONFIG.instruments[symbol],
+      }))
+      .filter(({ config }) => !!config);
+
+    if (eligibleInstruments.length === 0) {
+      return { success: false, advice: null, tradesPlaced: [], message: "No enabled instruments available." };
+    }
+
+    // Update last prices before sending to Claude
+    for (const { state } of eligibleInstruments) {
+      if (state.contractId) {
+        try {
+          const p = await this.client.getLastPrice(state.contractId);
+          if (p !== null) state.lastPrice = p;
+        } catch {
+          // non-fatal
+        }
+      }
+    }
+
+    let advice: ClaudeAdvice;
+    try {
+      advice = await getClaudeTradeAdvice(eligibleInstruments);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "Claude advisor error");
+      return { success: false, advice: null, tradesPlaced: [], message: `Claude analysis failed: ${msg}` };
+    }
+
+    logger.info({ summary: advice.summary, decisions: advice.decisions }, "Claude advice received");
+
+    const tradesPlaced: string[] = [];
+
+    for (const decision of advice.decisions) {
+      if (decision.action === "skip") continue;
+
+      const state = this.instrumentStates.get(decision.symbol);
+      const config = TRADING_CONFIG.instruments[decision.symbol];
+      if (!state || !config || !state.contractId) continue;
+      if (state.inPosition) {
+        logger.info({ symbol: decision.symbol }, "Skipping Claude trade — already in position");
+        continue;
+      }
+      if (!state.rangeData) {
+        logger.info({ symbol: decision.symbol }, "Skipping Claude trade — no range data");
+        continue;
+      }
+      if (state.todayTrades >= config.maxTradesPerDay) {
+        logger.info({ symbol: decision.symbol }, "Skipping Claude trade — max trades reached");
+        continue;
+      }
+      if (this.dailyPnl <= -TRADING_CONFIG.dailyLossLimit) {
+        logger.warn("Skipping Claude trade — daily loss limit hit");
+        continue;
+      }
+
+      const { rangeData } = state;
+      const isBuy = decision.action === "long";
+      const entryPrice = state.lastPrice ?? (isBuy ? rangeData.high : rangeData.low);
+      const stopPrice = isBuy ? rangeData.low : rangeData.high;
+      const tp1Price = isBuy
+        ? rangeData.high + rangeData.width * 0.5
+        : rangeData.low - rangeData.width * 0.5;
+      const tp2Price = isBuy
+        ? rangeData.high + rangeData.width
+        : rangeData.low - rangeData.width;
+
+      try {
+        const orderResult = await this.client.placeBracketOrder({
+          contractId: state.contractId,
+          isBuy,
+          qty: config.qty,
+          stopPrice,
+          tp1Price,
+          tp2Price,
+        });
+
+        const session = this.sessionPhase.startsWith("london") ? "london" : "ny";
+
+        const [trade] = await db
+          .insert(tradesTable)
+          .values({
+            instrument: decision.symbol,
+            direction: decision.action,
+            entryPrice,
+            exitPrice: null,
+            qty: config.qty,
+            pnl: null,
+            session: session as "london" | "ny",
+            status: "open",
+            entryTime: new Date(),
+            exitTime: null,
+            stopPrice,
+            tp1Price,
+            tp2Price,
+            projectxOrderId: orderResult.orderId,
+          })
+          .returning();
+
+        state.inPosition = true;
+        state.positionDirection = decision.action;
+        state.positionQty = config.qty;
+        state.positionEntryPrice = entryPrice;
+        state.positionOpenedAt = new Date().toISOString();
+        state.openTradeId = trade.id;
+        state.todayTrades++;
+        this.tradeCount++;
+
+        tradesPlaced.push(`${decision.symbol} ${decision.action.toUpperCase()}`);
+        logger.info({ symbol: decision.symbol, action: decision.action }, "Claude-initiated trade placed");
+      } catch (err) {
+        logger.error({ err, symbol: decision.symbol }, "Error placing Claude-initiated trade");
+      }
+    }
+
+    await this.updateDailySummary();
+
+    return {
+      success: true,
+      advice,
+      tradesPlaced,
+      message: tradesPlaced.length > 0
+        ? `Placed ${tradesPlaced.length} trade(s): ${tradesPlaced.join(", ")}`
+        : "Claude analysed the market but recommended no trades at this time.",
+    };
   }
 
   async start(): Promise<{ success: boolean; message: string }> {
@@ -188,7 +350,7 @@ class AgentController {
       return {
         symbol: state.symbol,
         name: config?.name ?? state.symbol,
-        enabled: config?.enabled ?? false,
+        enabled: this.isInstrumentEnabled(state.symbol),
         position: state.positionDirection,
         positionSize: state.positionQty,
         entryPrice: state.positionEntryPrice,
@@ -499,7 +661,7 @@ class AgentController {
     const rangeEnd = session === "london" ? "02:13" : "09:13";
 
     for (const [symbol, state] of this.instrumentStates) {
-      if (!TRADING_CONFIG.instruments[symbol]?.enabled) continue;
+      if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
 
       try {
@@ -532,7 +694,7 @@ class AgentController {
 
     for (const [symbol, state] of this.instrumentStates) {
       const config = TRADING_CONFIG.instruments[symbol];
-      if (!config?.enabled) continue;
+      if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
       if (!state.rangeData) continue;
       if (state.inPosition) continue;
