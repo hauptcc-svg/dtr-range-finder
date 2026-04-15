@@ -333,7 +333,7 @@ class AgentController {
       const config = TRADING_CONFIG.instruments[state.symbol];
       // Find matching open position from cache
       const openPos = this.openPositionsCache.find(
-        (p) => state.contractId !== null && Number(p.contractId) === state.contractId
+        (p) => state.contractId !== null && p.contractId === state.contractId
       );
       let unrealizedPnl: number | null = null;
       if (openPos && state.lastPrice && state.positionEntryPrice) {
@@ -469,7 +469,7 @@ class AgentController {
         if (!state || !state.contractId) continue;
 
         const livePos = livePositions.find(
-          (p) => Number(p.contractId) === state.contractId
+          (p) => p.contractId === state.contractId
         );
 
         if (livePos && livePos.size !== 0) {
@@ -825,7 +825,7 @@ class AgentController {
     for (const [symbol, state] of this.instrumentStates) {
       if (!state.contractId) continue;
       const pos = this.openPositionsCache.find(
-        (p) => Number(p.contractId) === state.contractId
+        (p) => p.contractId === state.contractId
       );
 
       if (pos && pos.size !== 0) {
@@ -841,7 +841,7 @@ class AgentController {
           // Use ProjectX realizedPnl from previous position snapshot if available,
           // otherwise fall back to heuristic calculation from last price.
           const prevPos = this.previousPositionsCache.find(
-            (p) => Number(p.contractId) === state.contractId
+            (p) => p.contractId === state.contractId
           );
           const config = TRADING_CONFIG.instruments[symbol];
           let pnl: number;

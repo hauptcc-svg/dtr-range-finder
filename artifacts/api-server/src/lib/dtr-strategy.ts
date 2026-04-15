@@ -40,7 +40,7 @@ export interface EntrySignal {
 
 export interface InstrumentState {
   symbol: string;
-  contractId: number | null;
+  contractId: string | null;
   rangeData: RangeData | null;
   lastPrice: number | null;
   todayTrades: number;
