@@ -27,7 +27,7 @@ router.get("/positions", async (req, res): Promise<void> => {
         entryPrice,
         currentPrice,
         unrealizedPnl,
-        openedAt: new Date().toISOString(),
+        openedAt: s.positionOpenedAt ?? new Date().toISOString(),
       };
     });
 

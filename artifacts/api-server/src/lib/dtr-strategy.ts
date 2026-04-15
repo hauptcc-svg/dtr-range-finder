@@ -50,6 +50,7 @@ export interface InstrumentState {
   positionDirection: TradeDirection | null;
   positionQty: number;
   positionEntryPrice: number | null;
+  positionOpenedAt: string | null;
   openTradeId: number | null;
 }
 
@@ -191,6 +192,7 @@ export function createInstrumentState(symbol: string): InstrumentState {
     positionDirection: null,
     positionQty: 0,
     positionEntryPrice: null,
+    positionOpenedAt: null,
     openTradeId: null,
   };
 }

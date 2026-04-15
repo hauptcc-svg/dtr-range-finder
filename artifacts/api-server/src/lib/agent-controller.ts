@@ -50,6 +50,7 @@ export interface InstrumentStatusData {
   positionSize: number;
   entryPrice: number | null;
   unrealizedPnl: number | null;
+  positionOpenedAt: string | null;
   todayPnl: number;
   todayTrades: number;
   longLosses: number;
@@ -165,7 +166,7 @@ class AgentController {
       const config = TRADING_CONFIG.instruments[state.symbol];
       // Find matching open position from cache
       const openPos = this.openPositionsCache.find(
-        (p) => p.contractId !== undefined && state.contractId !== null
+        (p) => state.contractId !== null && Number(p.contractId) === state.contractId
       );
       let unrealizedPnl: number | null = null;
       if (openPos && state.lastPrice && state.positionEntryPrice) {
@@ -187,6 +188,7 @@ class AgentController {
         positionSize: state.positionQty,
         entryPrice: state.positionEntryPrice,
         unrealizedPnl,
+        positionOpenedAt: state.positionOpenedAt,
         todayPnl: 0, // computed from DB on demand
         todayTrades: state.todayTrades,
         longLosses: state.longLosses,
@@ -449,6 +451,7 @@ class AgentController {
         state.positionDirection = signal.direction;
         state.positionQty = config.qty;
         state.positionEntryPrice = signal.entryPrice;
+        state.positionOpenedAt = new Date().toISOString();
         state.openTradeId = trade.id;
         state.todayTrades++;
 
@@ -508,6 +511,7 @@ class AgentController {
         state.positionDirection = null;
         state.positionQty = 0;
         state.positionEntryPrice = null;
+        state.positionOpenedAt = null;
         state.openTradeId = null;
       } catch (err) {
         logger.error({ err, symbol }, "Error flattening position");
@@ -584,6 +588,7 @@ class AgentController {
           state.positionDirection = null;
           state.positionQty = 0;
           state.positionEntryPrice = null;
+          state.positionOpenedAt = null;
           state.openTradeId = null;
         }
       }

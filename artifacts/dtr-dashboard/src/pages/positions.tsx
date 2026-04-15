@@ -1,4 +1,4 @@
-import { useGetPositions } from "@workspace/api-client-react";
+import { useGetPositions, getGetPositionsQueryKey } from "@workspace/api-client-react";
 import { formatCurrency, formatPrice, formatDate } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 
 export function Positions() {
   const { data: positions, isLoading } = useGetPositions({
-    query: { refetchInterval: 3000 }
+    query: { queryKey: getGetPositionsQueryKey(), refetchInterval: 3000 }
   });
 
   return (

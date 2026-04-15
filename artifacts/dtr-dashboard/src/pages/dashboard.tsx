@@ -5,7 +5,9 @@ import {
   useStartAgent, 
   useStopAgent,
   useGetDailySummary,
-  getGetAgentStatusQueryKey
+  getGetAgentStatusQueryKey,
+  getGetInstrumentsQueryKey,
+  getGetDailySummaryQueryKey,
 } from "@workspace/api-client-react";
 import { Play, Square, Activity, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,15 +22,15 @@ export function Dashboard() {
   const queryClient = useQueryClient();
   
   const { data: agentStatus, isLoading: isLoadingStatus } = useGetAgentStatus({
-    query: { refetchInterval: 3000 }
+    query: { queryKey: getGetAgentStatusQueryKey(), refetchInterval: 3000 }
   });
 
   const { data: instruments, isLoading: isLoadingInstruments } = useGetInstruments({
-    query: { refetchInterval: 3000 }
+    query: { queryKey: getGetInstrumentsQueryKey(), refetchInterval: 3000 }
   });
 
   const { data: dailySummary, isLoading: isLoadingSummary } = useGetDailySummary({
-    query: { refetchInterval: 5000 }
+    query: { queryKey: getGetDailySummaryQueryKey(), refetchInterval: 5000 }
   });
 
   const startAgent = useStartAgent();
