@@ -33,8 +33,11 @@ export function Dashboard() {
     query: { queryKey: getGetDailySummaryQueryKey(), refetchInterval: 5000 }
   });
 
-  const startAgent = useStartAgent();
-  const stopAgent = useStopAgent();
+  const agentKey = import.meta.env.VITE_AGENT_CONTROL_SECRET as string | undefined;
+  const agentKeyHeader: Record<string, string> = agentKey ? { "x-agent-key": agentKey } : {};
+
+  const startAgent = useStartAgent({ request: { headers: agentKeyHeader } });
+  const stopAgent = useStopAgent({ request: { headers: agentKeyHeader } });
 
   const handleStart = () => {
     startAgent.mutate(undefined, {

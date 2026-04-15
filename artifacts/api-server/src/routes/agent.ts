@@ -16,14 +16,20 @@ const router: IRouter = Router();
 
 /**
  * Middleware that enforces a shared secret on agent control endpoints (start/stop).
- * Set AGENT_CONTROL_SECRET env var to require the X-Agent-Key header.
- * If no secret is configured, requests are allowed through (development mode).
+ * AGENT_CONTROL_SECRET env var MUST be set; if absent the server refuses requests
+ * to prevent accidental exposure of live-order controls on internet-reachable hosts.
  */
 function requireAgentKey(req: Request, res: Response, next: NextFunction): void {
   const secret = process.env.AGENT_CONTROL_SECRET;
   if (!secret) {
-    // No secret configured — allow (development convenience)
-    next();
+    logger.error(
+      { path: req.path },
+      "AGENT_CONTROL_SECRET is not set — rejecting agent control request"
+    );
+    res.status(503).json({
+      error: "Server misconfiguration: AGENT_CONTROL_SECRET is not configured. " +
+        "Set this environment variable to enable agent control.",
+    });
     return;
   }
   const provided = req.headers["x-agent-key"];
