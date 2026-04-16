@@ -217,4 +217,55 @@ router.get("/account", async (_req, res): Promise<void> => {
   res.json(info);
 });
 
+// ---------------------------------------------------------------------------
+// GET  /api/agent/settings  — returns current effective risk settings
+// POST /api/agent/settings  — applies partial runtime overrides
+//   Body: { dailyLossLimit?: number, dailyProfitTarget?: number, maxTradesPerDay?: number | null }
+// ---------------------------------------------------------------------------
+router.get("/agent/settings", (_req, res): void => {
+  res.json(agentController.getSettings());
+});
+
+router.post("/agent/settings", requireAgentKeyOrSession, (req: Request, res: Response): void => {
+  const body = req.body as Record<string, unknown>;
+  const partial: { dailyLossLimit?: number; dailyProfitTarget?: number; maxTradesPerDay?: number | null } = {};
+
+  if (body.dailyLossLimit !== undefined) {
+    const v = Number(body.dailyLossLimit);
+    if (isNaN(v)) { res.status(400).json({ error: "dailyLossLimit must be a number" }); return; }
+    partial.dailyLossLimit = v;
+  }
+  if (body.dailyProfitTarget !== undefined) {
+    const v = Number(body.dailyProfitTarget);
+    if (isNaN(v)) { res.status(400).json({ error: "dailyProfitTarget must be a number" }); return; }
+    partial.dailyProfitTarget = v;
+  }
+  if ("maxTradesPerDay" in body) {
+    partial.maxTradesPerDay = body.maxTradesPerDay === null ? null : Number(body.maxTradesPerDay);
+  }
+
+  const result = agentController.updateSettings(partial);
+  if (!result.success) { res.status(400).json(result); return; }
+  logger.info({ partial }, "Risk settings updated via API");
+  res.json({ ...result, settings: agentController.getSettings() });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/agent/liquidate — immediately close all open positions
+// ---------------------------------------------------------------------------
+router.post("/agent/liquidate", requireAgentKeyOrSession, async (_req, res): Promise<void> => {
+  logger.warn("Liquidate all requested via API");
+  const result = await agentController.liquidateAll();
+  res.json(result);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/agent/lock — lock trading for the rest of the session
+// ---------------------------------------------------------------------------
+router.post("/agent/lock", requireAgentKeyOrSession, (_req, res): void => {
+  logger.warn("Lock trading requested via API");
+  const result = agentController.lockTrading();
+  res.json(result);
+});
+
 export default router;

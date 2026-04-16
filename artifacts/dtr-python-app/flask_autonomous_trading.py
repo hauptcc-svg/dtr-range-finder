@@ -350,6 +350,34 @@ def claude_analyse():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# RISK CONTROLS  (proxy to TypeScript API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/agent/settings", methods=["GET"])
+def get_agent_settings():
+    body, status = _ts_request("GET", "/agent/settings")
+    return jsonify(body), status
+
+
+@app.route("/api/agent/settings", methods=["POST"])
+def post_agent_settings():
+    body, status = _ts_request("POST", "/agent/settings", data=request.json or {})
+    return jsonify(body), status
+
+
+@app.route("/api/agent/liquidate", methods=["POST"])
+def agent_liquidate():
+    body, status = _ts_request("POST", "/agent/liquidate")
+    return jsonify(body), status
+
+
+@app.route("/api/agent/lock", methods=["POST"])
+def agent_lock():
+    body, status = _ts_request("POST", "/agent/lock")
+    return jsonify(body), status
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # DTR STATE & MARKET BIAS UPDATES  (proxy to TypeScript API)
 # ═══════════════════════════════════════════════════════════════════════════
 

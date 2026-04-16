@@ -92,6 +92,13 @@ class AgentController {
   private cachedAccountInfo: { balance: number; accountId: number; accountName: string; canTrade: boolean } | null = null;
   // Deduplication: tracks the timestamp of the last bar that fired an ATR pullback signal per instrument
   private lastAtrSignalBarTs: Map<string, number> = new Map();
+  // Runtime-editable risk settings (in-memory overrides; fall back to TRADING_CONFIG defaults)
+  private runtimeSettings: {
+    dailyLossLimit?: number;
+    dailyProfitTarget?: number;
+    maxTradesPerDay?: number;
+    tradingLocked?: boolean;
+  } = {};
 
   constructor() {
     // Initialize instrument states
@@ -178,6 +185,91 @@ class AgentController {
     return this.claudeAutonomousMode;
   }
 
+  // ─── Runtime risk settings ────────────────────────────────────────────────
+
+  private effectiveLossLimit(): number {
+    return this.runtimeSettings.dailyLossLimit ?? TRADING_CONFIG.dailyLossLimit;
+  }
+
+  private effectiveProfitTarget(): number {
+    return this.runtimeSettings.dailyProfitTarget ?? TRADING_CONFIG.dailyProfitTarget;
+  }
+
+  /** Returns the effective max-trades-per-day for a symbol (runtime global override takes precedence). */
+  private effectiveMaxTrades(symbol: string): number {
+    const configLimit = TRADING_CONFIG.instruments[symbol]?.maxTradesPerDay ?? 4;
+    if (this.runtimeSettings.maxTradesPerDay !== undefined) {
+      return Math.min(configLimit, this.runtimeSettings.maxTradesPerDay);
+    }
+    return configLimit;
+  }
+
+  /** Returns the current effective risk settings (runtime overrides merged with config defaults). */
+  getSettings(): {
+    dailyLossLimit: number;
+    dailyProfitTarget: number;
+    maxTradesPerDay: number | null;
+    tradingLocked: boolean;
+  } {
+    return {
+      dailyLossLimit: this.effectiveLossLimit(),
+      dailyProfitTarget: this.effectiveProfitTarget(),
+      maxTradesPerDay: this.runtimeSettings.maxTradesPerDay ?? null,
+      tradingLocked: this.runtimeSettings.tradingLocked ?? false,
+    };
+  }
+
+  /** Applies partial runtime overrides to risk settings. */
+  updateSettings(partial: {
+    dailyLossLimit?: number;
+    dailyProfitTarget?: number;
+    maxTradesPerDay?: number | null;
+  }): { success: boolean; message: string } {
+    if (partial.dailyLossLimit !== undefined) {
+      if (partial.dailyLossLimit <= 0) return { success: false, message: "dailyLossLimit must be > 0" };
+      this.runtimeSettings.dailyLossLimit = partial.dailyLossLimit;
+    }
+    if (partial.dailyProfitTarget !== undefined) {
+      if (partial.dailyProfitTarget <= 0) return { success: false, message: "dailyProfitTarget must be > 0" };
+      this.runtimeSettings.dailyProfitTarget = partial.dailyProfitTarget;
+    }
+    if ("maxTradesPerDay" in partial) {
+      this.runtimeSettings.maxTradesPerDay = partial.maxTradesPerDay ?? undefined;
+    }
+    logger.info({ runtimeSettings: this.runtimeSettings }, "Risk settings updated");
+    return { success: true, message: "Settings updated" };
+  }
+
+  /** Closes all open positions immediately and returns. */
+  async liquidateAll(): Promise<{ success: boolean; message: string }> {
+    if (!this.client) {
+      return { success: false, message: "Agent is not running — positions cannot be liquidated via API when offline." };
+    }
+    logger.warn("Manual liquidation requested via API");
+    await this.flattenAllPositions("ended");
+    this.sendTelegram(
+      `🚨 <b>MANUAL LIQUIDATION</b> · DeclanCapital FX\n\n` +
+      `All open positions closed by dashboard action.\n` +
+      `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+      `<i>${new Date().toUTCString()}</i>`
+    ).catch(() => {});
+    return { success: true, message: "All positions liquidated." };
+  }
+
+  /** Locks trading for the rest of the session (sets phase to daily_limit_hit). */
+  lockTrading(): { success: boolean; message: string } {
+    this.runtimeSettings.tradingLocked = true;
+    this.sessionPhase = "daily_limit_hit";
+    logger.warn("Trading locked by dashboard action");
+    this.sendTelegram(
+      `🔒 <b>TRADING LOCKED</b> · DeclanCapital FX\n\n` +
+      `Trading locked via dashboard. No new trades will be placed.\n` +
+      `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+      `<i>${new Date().toUTCString()}</i>`
+    ).catch(() => {});
+    return { success: true, message: "Trading locked for the session. Restart the agent to unlock." };
+  }
+
   /**
    * Autonomous tick: fetch recent bars + prices for all enabled instruments,
    * send to Claude, execute its decisions (long/short/close/skip).
@@ -230,8 +322,8 @@ class AgentController {
       advice = await getClaudeAutonomousAdvice(
         instrumentsWithBars,
         this.dailyPnl,
-        TRADING_CONFIG.dailyLossLimit,
-        TRADING_CONFIG.dailyProfitTarget
+        this.effectiveLossLimit(),
+        this.effectiveProfitTarget()
       );
     } catch (err) {
       logger.error({ err }, "Claude autonomous advice failed");
@@ -248,7 +340,7 @@ class AgentController {
       if (!state || !config || !state.contractId) continue;
 
       // Guard: daily limits
-      if (this.dailyPnl <= -TRADING_CONFIG.dailyLossLimit) break;
+      if (this.dailyPnl <= -this.effectiveLossLimit()) break;
 
       if (decision.action === "close") {
         if (!state.inPosition) continue;
@@ -265,7 +357,7 @@ class AgentController {
 
       // Long or short entry
       if (state.inPosition) continue;
-      if (state.todayTrades >= config.maxTradesPerDay) continue;
+      if (state.todayTrades >= this.effectiveMaxTrades(decision.symbol)) continue;
 
       const isBuy = decision.action === "long";
       const price = state.lastPrice;
@@ -393,8 +485,8 @@ class AgentController {
         advice = await getClaudeAutonomousAdvice(
           withBars,
           this.dailyPnl,
-          TRADING_CONFIG.dailyLossLimit,
-          TRADING_CONFIG.dailyProfitTarget
+          this.effectiveLossLimit(),
+          this.effectiveProfitTarget()
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -424,8 +516,8 @@ class AgentController {
 
         if (decision.action === "skip") continue;
         if (state.inPosition) continue;
-        if (state.todayTrades >= config.maxTradesPerDay) continue;
-        if (this.dailyPnl <= -TRADING_CONFIG.dailyLossLimit) continue;
+        if (state.todayTrades >= this.effectiveMaxTrades(decision.symbol)) continue;
+        if (this.dailyPnl <= -this.effectiveLossLimit()) continue;
 
         const isBuy = decision.action === "long";
         const price = state.lastPrice;
@@ -550,11 +642,11 @@ class AgentController {
         logger.info({ symbol: decision.symbol }, "Skipping Claude trade — no range data");
         continue;
       }
-      if (state.todayTrades >= config.maxTradesPerDay) {
+      if (state.todayTrades >= this.effectiveMaxTrades(decision.symbol)) {
         logger.info({ symbol: decision.symbol }, "Skipping Claude trade — max trades reached");
         continue;
       }
-      if (this.dailyPnl <= -TRADING_CONFIG.dailyLossLimit) {
+      if (this.dailyPnl <= -this.effectiveLossLimit()) {
         logger.warn("Skipping Claude trade — daily loss limit hit");
         continue;
       }
@@ -740,8 +832,8 @@ class AgentController {
       running: this.running,
       sessionPhase: this.sessionPhase,
       dailyPnl: this.dailyPnl,
-      dailyLossLimit: TRADING_CONFIG.dailyLossLimit,
-      dailyProfitTarget: TRADING_CONFIG.dailyProfitTarget,
+      dailyLossLimit: this.effectiveLossLimit(),
+      dailyProfitTarget: this.effectiveProfitTarget(),
       tradeCount: this.tradeCount,
       lastUpdated: this.lastUpdated,
       authenticatedWithProjectX: this.authenticatedWithProjectX,
@@ -1048,8 +1140,14 @@ class AgentController {
       return;
     }
 
+    // Check trading lock (manual dashboard lock)
+    if (this.runtimeSettings.tradingLocked) {
+      this.sessionPhase = "daily_limit_hit";
+      return;
+    }
+
     // Check daily limits
-    if (this.dailyPnl <= -TRADING_CONFIG.dailyLossLimit) {
+    if (this.dailyPnl <= -this.effectiveLossLimit()) {
       if (this.sessionPhase !== "daily_limit_hit") {
         logger.warn({ dailyPnl: this.dailyPnl }, "Daily loss limit hit, stopping trading");
         this.sessionPhase = "daily_limit_hit";
@@ -1057,7 +1155,7 @@ class AgentController {
         this.sendTelegram(
           `🚨 <b>DAILY LOSS LIMIT HIT</b> · DeclanCapital FX\n\n` +
           `<b>Daily P&amp;L:</b> $${this.dailyPnl.toFixed(2)}\n` +
-          `<b>Limit:</b> -$${TRADING_CONFIG.dailyLossLimit}\n` +
+          `<b>Limit:</b> -$${this.effectiveLossLimit()}\n` +
           `<b>All trading halted.</b>\n` +
           `<i>${new Date().toUTCString()}</i>`
         ).catch(() => {});
@@ -1065,7 +1163,7 @@ class AgentController {
       return;
     }
 
-    if (this.dailyPnl >= TRADING_CONFIG.dailyProfitTarget) {
+    if (this.dailyPnl >= this.effectiveProfitTarget()) {
       if (this.sessionPhase !== "daily_limit_hit") {
         logger.info({ dailyPnl: this.dailyPnl }, "Daily profit target hit, stopping trading");
         this.sessionPhase = "daily_limit_hit";
@@ -1073,7 +1171,7 @@ class AgentController {
         this.sendTelegram(
           `🎯 <b>DAILY PROFIT TARGET HIT</b> · DeclanCapital FX\n\n` +
           `<b>Daily P&amp;L:</b> +$${this.dailyPnl.toFixed(2)}\n` +
-          `<b>Target:</b> +$${TRADING_CONFIG.dailyProfitTarget}\n` +
+          `<b>Target:</b> +$${this.effectiveProfitTarget()}\n` +
           `<b>All trading halted — great day!</b>\n` +
           `<i>${new Date().toUTCString()}</i>`
         ).catch(() => {});
@@ -1148,6 +1246,7 @@ class AgentController {
       if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
       if (state.inPosition) continue;
+      if (state.todayTrades >= this.effectiveMaxTrades(symbol)) continue;
 
       try {
         // Fetch last 8 hours of 1-min bars (covers EMA200 warm-up)
@@ -1282,6 +1381,7 @@ class AgentController {
       if (config?.strategyMode === "atr_pullback") continue;
       if (!state.rangeData) continue;
       if (state.inPosition) continue;
+      if (state.todayTrades >= this.effectiveMaxTrades(symbol)) continue;
 
       try {
         const lastPrice = await this.client.getLastPrice(state.contractId);

@@ -474,6 +474,119 @@
             .stats-bar { grid-template-columns: repeat(2, 1fr); }
             .instrument-grid { grid-template-columns: 1fr 1fr; }
         }
+
+        /* ── Risk Controls ── */
+        .risk-card {
+            background: #0d1117;
+            border: 1px solid rgba(239,68,68,0.25);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .risk-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin: 14px 0;
+        }
+        @media (max-width: 600px) { .risk-grid { grid-template-columns: 1fr; } }
+        .risk-field label {
+            display: block;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #64748b;
+            margin-bottom: 5px;
+        }
+        .risk-field input {
+            width: 100%;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            color: #e2e8f0;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            padding: 6px 10px;
+            box-sizing: border-box;
+            outline: none;
+        }
+        .risk-field input:focus { border-color: rgba(239,68,68,0.5); }
+        .risk-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 14px;
+            flex-wrap: wrap;
+        }
+        .btn-save-risk {
+            flex: 1;
+            min-width: 120px;
+            background: #166534;
+            border: 1px solid rgba(34,197,94,0.4);
+            color: #22c55e;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 12px;
+            padding: 8px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-save-risk:hover { background: #14532d; }
+        .btn-save-risk:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-liquidate {
+            flex: 1;
+            min-width: 140px;
+            background: rgba(239,68,68,0.12);
+            border: 1px solid rgba(239,68,68,0.5);
+            color: #ef4444;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 12px;
+            padding: 8px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-liquidate:hover { background: rgba(239,68,68,0.22); }
+        .btn-liquidate:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-lock {
+            flex: 1;
+            min-width: 130px;
+            background: rgba(234,179,8,0.10);
+            border: 1px solid rgba(234,179,8,0.45);
+            color: #eab308;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 12px;
+            padding: 8px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-lock:hover { background: rgba(234,179,8,0.18); }
+        .btn-lock:disabled { opacity: 0.5; cursor: not-allowed; }
+        .risk-feedback {
+            font-size: 11px;
+            font-family: 'Courier New', monospace;
+            margin-top: 8px;
+            min-height: 16px;
+        }
+        .risk-feedback.ok { color: #22c55e; }
+        .risk-feedback.err { color: #ef4444; }
+        .badge-locked {
+            display: inline-block;
+            background: rgba(234,179,8,0.15);
+            border: 1px solid rgba(234,179,8,0.5);
+            color: #eab308;
+            font-size: 10px;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            padding: 2px 10px;
+            border-radius: 12px;
+            letter-spacing: 1px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
     </style>
 </head>
 <body>
@@ -604,6 +717,35 @@
                 <div id="analyse-summary" class="analyse-reasoning" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(14,165,233,0.1)"></div>
             </div>
         </div>
+    </div>
+
+    <!-- Risk Controls -->
+    <div class="risk-card" id="risk-controls-card">
+        <div class="card-title" style="margin-bottom:4px">
+            ⚠️ Risk Controls
+            <span class="badge-locked" id="trading-locked-badge" style="display:none">🔒 TRADING LOCKED</span>
+        </div>
+        <div style="font-size:11px;color:#475569;margin-bottom:2px">Changes take effect immediately — no restart required. Lock is session-wide.</div>
+        <div class="risk-grid">
+            <div class="risk-field">
+                <label>Daily Loss Limit ($)</label>
+                <input type="number" id="rc-loss-limit" min="1" placeholder="200" />
+            </div>
+            <div class="risk-field">
+                <label>Daily Profit Target ($)</label>
+                <input type="number" id="rc-profit-target" min="1" placeholder="1400" />
+            </div>
+            <div class="risk-field">
+                <label>Max Trades Per Day (all instruments)</label>
+                <input type="number" id="rc-max-trades" min="1" placeholder="4 (default config)" />
+            </div>
+        </div>
+        <div class="risk-actions">
+            <button class="btn-save-risk" id="btn-save-risk" onclick="saveRiskSettings()">💾 SAVE SETTINGS</button>
+            <button class="btn-liquidate" id="btn-liquidate" onclick="liquidateAll()">🔴 LIQUIDATE ALL TRADES</button>
+            <button class="btn-lock" id="btn-lock" onclick="lockTrading()">🔒 LOCK TRADING</button>
+        </div>
+        <div class="risk-feedback" id="risk-feedback"></div>
     </div>
 
     <div class="refresh-ticker">🔄 Auto-refreshing every 3 s • No manual refresh needed</div>
@@ -1224,9 +1366,109 @@ function startPolling() {
     }, 5000);
 }
 
+// ─── Risk Controls ───────────────────────────────────────────────────────────
+
+function setRiskFeedback(msg, isError) {
+    const el = document.getElementById('risk-feedback');
+    el.textContent = msg;
+    el.className = 'risk-feedback ' + (isError ? 'err' : 'ok');
+    if (!isError && msg) {
+        setTimeout(() => { if (el.textContent === msg) { el.textContent = ''; el.className = 'risk-feedback'; } }, 4000);
+    }
+}
+
+async function loadRiskSettings() {
+    try {
+        const data = await apiFetch('/api/agent/settings');
+        const lossEl = document.getElementById('rc-loss-limit');
+        const profEl = document.getElementById('rc-profit-target');
+        const tradesEl = document.getElementById('rc-max-trades');
+        if (data.dailyLossLimit != null) lossEl.value = data.dailyLossLimit;
+        if (data.dailyProfitTarget != null) profEl.value = data.dailyProfitTarget;
+        if (data.maxTradesPerDay != null) tradesEl.value = data.maxTradesPerDay;
+        else tradesEl.value = '';
+        const badge = document.getElementById('trading-locked-badge');
+        badge.style.display = data.tradingLocked ? 'inline-block' : 'none';
+        if (data.tradingLocked) {
+            document.getElementById('btn-lock').disabled = true;
+            document.getElementById('btn-lock').textContent = '🔒 TRADING LOCKED';
+        }
+    } catch(e) {
+        setRiskFeedback('Could not load settings: ' + e.message, true);
+    }
+}
+
+async function saveRiskSettings() {
+    const btn = document.getElementById('btn-save-risk');
+    btn.disabled = true;
+    setRiskFeedback('Saving…', false);
+    try {
+        const lossVal = document.getElementById('rc-loss-limit').value;
+        const profVal = document.getElementById('rc-profit-target').value;
+        const tradesVal = document.getElementById('rc-max-trades').value;
+        const payload = {};
+        if (lossVal !== '') payload.dailyLossLimit = Number(lossVal);
+        if (profVal !== '') payload.dailyProfitTarget = Number(profVal);
+        if (tradesVal !== '') payload.maxTradesPerDay = Number(tradesVal);
+        else payload.maxTradesPerDay = null;
+        const data = await apiFetch('/api/agent/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (data.error) throw new Error(data.error);
+        setRiskFeedback('✅ Settings saved', false);
+        if (data.settings) {
+            const badge = document.getElementById('trading-locked-badge');
+            badge.style.display = data.settings.tradingLocked ? 'inline-block' : 'none';
+        }
+    } catch(e) {
+        setRiskFeedback('❌ ' + e.message, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function liquidateAll() {
+    if (!confirm('⚠️ LIQUIDATE ALL — This will immediately close ALL open positions. Are you sure?')) return;
+    const btn = document.getElementById('btn-liquidate');
+    btn.disabled = true;
+    btn.textContent = '⏳ Closing…';
+    setRiskFeedback('Liquidating all positions…', false);
+    try {
+        const data = await apiFetch('/api/agent/liquidate', { method: 'POST' });
+        if (!data.success) throw new Error(data.message || 'Liquidation failed');
+        setRiskFeedback('✅ ' + (data.message || 'All positions closed'), false);
+    } catch(e) {
+        setRiskFeedback('❌ ' + e.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔴 LIQUIDATE ALL TRADES';
+        await updateDashboard();
+    }
+}
+
+async function lockTrading() {
+    if (!confirm('🔒 LOCK TRADING — No new trades for the rest of this session. Requires agent restart to unlock. Proceed?')) return;
+    const btn = document.getElementById('btn-lock');
+    btn.disabled = true;
+    setRiskFeedback('Locking trading…', false);
+    try {
+        const data = await apiFetch('/api/agent/lock', { method: 'POST' });
+        if (!data.success) throw new Error(data.message || 'Lock failed');
+        setRiskFeedback('🔒 ' + (data.message || 'Trading locked'), false);
+        document.getElementById('trading-locked-badge').style.display = 'inline-block';
+        btn.textContent = '🔒 TRADING LOCKED';
+    } catch(e) {
+        setRiskFeedback('❌ ' + e.message, true);
+        btn.disabled = false;
+    }
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 updateDashboard();
 updateInstruments();
+loadRiskSettings();
 startPolling();
 </script>
 </body>
