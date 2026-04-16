@@ -478,6 +478,9 @@ class AgentController {
     if (!this.client) {
       return { success: false, advice: null, tradesPlaced: [], message: "Agent is not running — start it first so prices are available." };
     }
+    if (this.runtimeSettings.tradingLocked) {
+      return { success: false, advice: null, tradesPlaced: [], message: "Trading is locked — no new entries are permitted until the next session." };
+    }
 
     const eligibleInstruments = Array.from(this.instrumentStates.entries())
       .filter(([symbol]) => this.isInstrumentEnabled(symbol))
@@ -1133,6 +1136,12 @@ class AgentController {
       this.dailyPnl = 0;
       this.tradeCount = 0;
       this.sessionPhase = "idle";
+
+      // Clear the trading lock on day rollover so a new session can trade
+      if (this.runtimeSettings.tradingLocked) {
+        this.runtimeSettings.tradingLocked = false;
+        logger.info("Trading lock cleared on day rollover");
+      }
 
       // Reset instrument states
       for (const symbol of Object.keys(TRADING_CONFIG.instruments)) {
