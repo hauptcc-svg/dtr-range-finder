@@ -2016,11 +2016,11 @@ function openAccountModal() {
     document.getElementById('af-id').value = '';
     document.getElementById('af-number').value = '';
     document.getElementById('af-label').value = '';
-    document.getElementById('account-modal').classList.add('active');
+    document.getElementById('account-modal').classList.add('open');
 }
 
 function closeAccountModal() {
-    document.getElementById('account-modal').classList.remove('active');
+    document.getElementById('account-modal').classList.remove('open');
 }
 
 async function saveAccount() {
