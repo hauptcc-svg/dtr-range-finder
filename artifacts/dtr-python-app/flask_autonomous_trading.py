@@ -69,17 +69,22 @@ def _agent_headers() -> dict:
     }
 
 
-def _ts_get(path: str, timeout: int = 10) -> dict:
+def _ts_get(path: str, params: dict = None, timeout: int = 10) -> dict:
     """GET from the TypeScript API. All routes are mounted under /api."""
     try:
-        r = requests.get(f"{TS_API}/api{path}", headers=_agent_headers(), timeout=timeout)
+        r = requests.get(
+            f"{TS_API}/api{path}",
+            headers=_agent_headers(),
+            params=params,
+            timeout=timeout,
+        )
         return r.json()
     except Exception as e:
         logger.error(f"TS API GET /api{path} failed: {e}")
         return {"error": str(e)}
 
 
-def _ts_post(path: str, data: dict = None, timeout: int = 10) -> dict:
+def _ts_post(path: str, data: dict = None, timeout: int = 30) -> dict:
     """POST to the TypeScript API. All routes are mounted under /api."""
     try:
         r = requests.post(
@@ -91,6 +96,21 @@ def _ts_post(path: str, data: dict = None, timeout: int = 10) -> dict:
         return r.json()
     except Exception as e:
         logger.error(f"TS API POST /api{path} failed: {e}")
+        return {"error": str(e)}
+
+
+def _ts_patch(path: str, data: dict = None, timeout: int = 10) -> dict:
+    """PATCH to the TypeScript API. All routes are mounted under /api."""
+    try:
+        r = requests.patch(
+            f"{TS_API}/api{path}",
+            json=data or {},
+            headers=_agent_headers(),
+            timeout=timeout,
+        )
+        return r.json()
+    except Exception as e:
+        logger.error(f"TS API PATCH /api{path} failed: {e}")
         return {"error": str(e)}
 
 
@@ -262,6 +282,78 @@ def live_dashboard():
     if "error" in ts_status:
         return jsonify({"success": False, "error": ts_status["error"]}), 502
     return jsonify(_build_dashboard_payload(ts_status))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INSTRUMENTS  (proxy to TypeScript API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/instruments")
+def get_instruments():
+    resp = _ts_get("/agent/instruments")
+    if "error" in resp:
+        return jsonify({"error": resp["error"]}), 502
+    return jsonify(resp)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# POSITIONS  (proxy to TypeScript API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/positions")
+def get_positions():
+    resp = _ts_get("/positions")
+    if isinstance(resp, dict) and "error" in resp:
+        return jsonify({"error": resp["error"]}), 502
+    return jsonify(resp)
+
+
+@app.route("/api/positions/<symbol>/close", methods=["POST"])
+def close_position(symbol: str):
+    resp = _ts_post(f"/positions/{symbol.upper()}/close")
+    if "error" in resp:
+        return jsonify({"success": False, "error": resp["error"]}), 502
+    return jsonify(resp)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TRADES  (proxy to TypeScript API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/trades")
+def get_trades():
+    params = {}
+    if request.args.get("page"):
+        params["page"] = request.args["page"]
+    if request.args.get("pageSize"):
+        params["pageSize"] = request.args["pageSize"]
+    if request.args.get("instrument"):
+        params["instrument"] = request.args["instrument"]
+    resp = _ts_get("/trades", params=params)
+    if isinstance(resp, dict) and "error" in resp:
+        return jsonify({"error": resp["error"]}), 502
+    return jsonify(resp)
+
+
+@app.route("/api/trades/<int:trade_id>/notes", methods=["PATCH"])
+def patch_trade_notes(trade_id: int):
+    data = request.json or {}
+    resp = _ts_patch(f"/trades/{trade_id}/notes", data)
+    if isinstance(resp, dict) and not resp.get("success") and "error" in resp:
+        return jsonify(resp), 502
+    return jsonify(resp)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CLAUDE TRADE ANALYSIS  (proxy to TypeScript API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/claude/analyse", methods=["POST"])
+def claude_analyse():
+    resp = _ts_post("/agent/claude-trade", timeout=60)
+    if "error" in resp:
+        return jsonify({"success": False, "error": resp["error"]}), 502
+    return jsonify(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

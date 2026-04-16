@@ -5,406 +5,992 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DTR Autonomous Trading</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: 'Courier New', monospace;
             background: linear-gradient(135deg, #0f1419 0%, #1a1f2e 100%);
             color: #e0e0e0;
-            padding: 20px;
+            min-height: 100vh;
         }
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
+        /* ── Header ── */
+        .header {
+            background: rgba(0,0,0,0.5);
+            border-bottom: 1px solid rgba(0,255,136,0.2);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
-
-        h1 {
+        .header h1 {
             color: #00ff88;
-            margin-bottom: 30px;
-            text-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+            font-size: 18px;
+            text-shadow: 0 0 10px rgba(0,255,136,0.3);
+            margin: 0;
         }
 
-        .mode-section {
-            background: rgba(0, 0, 0, 0.4);
-            border: 2px solid rgba(0, 255, 136, 0.3);
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
+        /* ── Tab navigation ── */
+        .tabs {
+            display: flex;
+            background: rgba(0,0,0,0.4);
+            border-bottom: 1px solid rgba(0,255,136,0.15);
+            padding: 0 24px;
+        }
+        .tab {
+            padding: 12px 20px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #666;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            background: none;
+            border-top: none;
+            border-left: none;
+            border-right: none;
+        }
+        .tab:hover { color: #aaa; }
+        .tab.active { color: #00ff88; border-bottom-color: #00ff88; }
+
+        /* ── Main content ── */
+        .page { display: none; padding: 24px; max-width: 1300px; margin: 0 auto; }
+        .page.active { display: block; }
+
+        /* ── Generic card ── */
+        .card {
+            background: rgba(0,0,0,0.4);
+            border: 1px solid rgba(0,255,136,0.2);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .card-title {
+            color: #00ff88;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
         }
 
+        /* ── Mode section ── */
         .mode-buttons {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-            margin-bottom: 20px;
+            gap: 12px;
+            margin-bottom: 16px;
         }
-
         button {
-            padding: 15px;
+            padding: 13px;
             border: none;
             border-radius: 8px;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: bold;
             cursor: pointer;
             text-transform: uppercase;
             transition: all 0.2s;
+            font-family: 'Courier New', monospace;
         }
+        .btn-dtr { background: linear-gradient(135deg, #3b82f6, #1e40af); color: #fff; }
+        .btn-dtr:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(59,130,246,0.4); }
+        .btn-claude { background: linear-gradient(135deg, #8b5cf6, #6d28d9); color: #fff; }
+        .btn-claude:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(139,92,246,0.4); }
+        .btn-halt { background: linear-gradient(135deg, #ef4444, #991b1b); color: #fff; }
+        .btn-halt:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(239,68,68,0.4); }
 
-        .btn-dtr {
-            background: linear-gradient(135deg, #3b82f6, #1e40af);
-            color: white;
-        }
-
-        .btn-dtr:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
-        }
-
-        .btn-claude {
-            background: linear-gradient(135deg, #8b5cf6, #6d28d9);
-            color: white;
-        }
-
-        .btn-claude:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
-        }
-
-        .btn-halt {
-            background: linear-gradient(135deg, #ef4444, #991b1b);
-            color: white;
-        }
-
-        .btn-halt:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
-        }
-
+        /* ── Status cards ── */
         .status-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
         }
-
         .status-card {
-            background: rgba(0, 0, 0, 0.4);
-            border: 1px solid rgba(0, 255, 136, 0.2);
+            background: rgba(0,0,0,0.4);
+            border: 1px solid rgba(0,255,136,0.15);
             border-radius: 8px;
-            padding: 15px;
+            padding: 14px;
         }
-
-        .status-label {
-            color: #00ff88;
-            font-size: 11px;
-            text-transform: uppercase;
-            margin-bottom: 8px;
-        }
-
-        .status-value {
-            font-size: 18px;
-            font-weight: bold;
-            color: #fff;
-        }
-
-        .status-subtext {
-            color: #888;
-            font-size: 12px;
-            margin-top: 8px;
-        }
-
-        .status-running {
-            color: #10b981;
-        }
-
-        .status-halted {
-            color: #ef4444;
-        }
-
-        .status-monitoring {
+        .status-label { color: #00ff88; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+        .status-value { font-size: 16px; font-weight: bold; color: #fff; }
+        .status-subtext { color: #666; font-size: 11px; margin-top: 6px; }
+        .dot {
             display: inline-block;
-            width: 8px;
-            height: 8px;
-            background: #10b981;
+            width: 8px; height: 8px;
             border-radius: 50%;
-            margin-right: 8px;
-            animation: pulse 1s infinite;
+            margin-right: 6px;
+            animation: pulse 1.4s infinite;
         }
+        .dot-green { background: #10b981; }
+        .dot-grey { background: #555; animation: none; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        .data-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-        }
-
-        .data-card {
-            background: rgba(0, 0, 0, 0.4);
-            border: 1px solid rgba(0, 255, 136, 0.2);
-            border-radius: 8px;
-            padding: 15px;
-        }
-
-        .data-title {
-            color: #00ff88;
-            font-size: 12px;
-            text-transform: uppercase;
-            margin-bottom: 10px;
-        }
-
+        /* ── Data row cards (Account/Performance) ── */
+        .data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
         .data-item {
             display: flex;
             justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px solid rgba(0, 255, 136, 0.1);
+            padding: 7px 0;
+            border-bottom: 1px solid rgba(0,255,136,0.08);
             font-size: 13px;
         }
+        .data-item:last-child { border-bottom: none; }
+        .data-label { color: #888; }
+        .data-value { font-weight: bold; color: #fff; }
+        .positive { color: #10b981; }
+        .negative { color: #ef4444; }
 
-        .data-item:last-child {
-            border-bottom: none;
+        /* ── Instrument cards ── */
+        .instrument-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
         }
-
-        .data-label {
-            color: #aaa;
-        }
-
-        .data-value {
-            font-weight: bold;
-            color: #fff;
-        }
-
-        .positive {
-            color: #10b981;
-        }
-
-        .negative {
-            color: #ef4444;
-        }
-
-        .info-box {
-            background: rgba(59, 130, 246, 0.1);
-            border: 1px solid rgba(59, 130, 246, 0.3);
+        .instrument-card {
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(0,255,136,0.15);
             border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 20px;
-            font-size: 13px;
-            color: #cbd5e1;
+            padding: 14px;
         }
-
-        .info-box strong {
-            color: #3b82f6;
-        }
-
-        .refresh-indicator {
+        .instrument-card.has-position { border-color: rgba(0,255,136,0.5); }
+        .inst-symbol { font-size: 14px; font-weight: bold; color: #00ff88; margin-bottom: 6px; }
+        .inst-price { font-size: 18px; font-weight: bold; color: #fff; margin-bottom: 4px; }
+        .inst-detail { font-size: 11px; color: #666; margin-bottom: 4px; }
+        .inst-pnl { font-size: 12px; font-weight: bold; }
+        .inst-badge {
             display: inline-block;
-            padding: 8px 12px;
-            background: rgba(0, 255, 136, 0.1);
-            border: 1px solid rgba(0, 255, 136, 0.3);
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-top: 4px;
+            font-weight: bold;
+        }
+        .badge-long { background: rgba(16,185,129,0.2); color: #10b981; }
+        .badge-short { background: rgba(239,68,68,0.2); color: #ef4444; }
+        .badge-flat { background: rgba(100,100,100,0.2); color: #666; }
+
+        /* ── Analyse button ── */
+        .analyse-section { margin-bottom: 16px; }
+        .btn-analyse {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #0ea5e9, #0369a1);
+            color: #fff;
+            font-size: 14px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+        .btn-analyse:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(14,165,233,0.4); }
+        .btn-analyse:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .analyse-result {
+            display: none;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(14,165,233,0.3);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .analyse-result.visible { display: block; }
+        .analyse-result-title { color: #0ea5e9; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+        .decision-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(14,165,233,0.1);
+            font-size: 13px;
+        }
+        .decision-row:last-child { border-bottom: none; }
+        .decision-symbol { font-weight: bold; color: #e0e0e0; }
+        .decision-badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .decision-long { background: rgba(16,185,129,0.2); color: #10b981; }
+        .decision-short { background: rgba(239,68,68,0.2); color: #ef4444; }
+        .decision-skip { background: rgba(100,100,100,0.2); color: #888; }
+        .decision-close { background: rgba(245,158,11,0.2); color: #f59e0b; }
+        .analyse-reasoning { font-size: 12px; color: #888; margin-top: 4px; line-height: 1.5; }
+        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Positions table ── */
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        thead th {
+            text-align: left;
+            padding: 10px 8px;
+            color: #00ff88;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1px solid rgba(0,255,136,0.2);
+        }
+        tbody tr { border-bottom: 1px solid rgba(0,255,136,0.05); transition: background 0.1s; }
+        tbody tr:hover { background: rgba(0,255,136,0.03); }
+        tbody td { padding: 10px 8px; vertical-align: middle; }
+        .td-mono { font-family: 'Courier New', monospace; }
+        .td-right { text-align: right; }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #555;
+            font-size: 13px;
+        }
+
+        /* ── Close button ── */
+        .btn-close-pos {
+            padding: 5px 10px;
+            background: rgba(239,68,68,0.15);
+            border: 1px solid rgba(239,68,68,0.4);
+            color: #ef4444;
+            font-size: 11px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+        .btn-close-pos:hover { background: rgba(239,68,68,0.3); }
+        .btn-close-pos:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ── Stats bar ── */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .stat-card {
+            background: rgba(0,0,0,0.4);
+            border: 1px solid rgba(0,255,136,0.15);
+            border-radius: 6px;
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-label { color: #555; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+        .stat-value { font-size: 16px; font-weight: bold; color: #fff; }
+
+        /* ── Pagination ── */
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+            font-size: 12px;
+            color: #666;
+        }
+        .btn-page {
+            padding: 6px 14px;
+            background: rgba(0,0,0,0.4);
+            border: 1px solid rgba(0,255,136,0.2);
+            color: #00ff88;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        .btn-page:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn-page:hover:not(:disabled) { background: rgba(0,255,136,0.1); }
+
+        /* ── Journal icon & modal ── */
+        .btn-journal {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #555;
+            font-size: 14px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            transition: color 0.15s;
+        }
+        .btn-journal:hover { color: #00ff88; }
+        .btn-journal.has-notes { color: #0ea5e9; }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal {
+            background: #0f1419;
+            border: 1px solid rgba(0,255,136,0.3);
+            border-radius: 10px;
+            padding: 24px;
+            width: 480px;
+            max-width: 95vw;
+        }
+        .modal-title { color: #00ff88; font-size: 13px; text-transform: uppercase; margin-bottom: 6px; }
+        .modal-meta { color: #555; font-size: 11px; margin-bottom: 16px; }
+        .modal textarea {
+            width: 100%;
+            height: 140px;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(0,255,136,0.2);
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            padding: 10px;
+            resize: vertical;
+            outline: none;
+        }
+        .modal textarea:focus { border-color: rgba(0,255,136,0.5); }
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .btn-cancel-modal {
+            padding: 8px 16px;
+            background: rgba(0,0,0,0.4);
+            border: 1px solid rgba(0,255,136,0.2);
+            color: #888;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        .btn-save-notes {
+            padding: 8px 16px;
+            background: rgba(0,255,136,0.15);
+            border: 1px solid rgba(0,255,136,0.4);
+            color: #00ff88;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        .btn-save-notes:disabled { opacity: 0.5; cursor: not-allowed; }
+        .saved-badge { color: #10b981; font-size: 12px; margin-right: auto; }
+
+        /* ── Notes sub-row ── */
+        .notes-preview-row td {
+            background: rgba(14,165,233,0.04);
+            padding: 6px 8px 8px 28px;
+            font-size: 11px;
+            color: #888;
+            font-style: italic;
+        }
+
+        /* ── Info box ── */
+        .info-box {
+            background: rgba(59,130,246,0.08);
+            border: 1px solid rgba(59,130,246,0.25);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        .info-box strong { color: #3b82f6; }
+
+        /* ── Refresh ticker ── */
+        .refresh-ticker {
+            display: inline-block;
+            padding: 6px 12px;
+            background: rgba(0,255,136,0.07);
+            border: 1px solid rgba(0,255,136,0.2);
             border-radius: 4px;
             font-size: 11px;
             color: #00ff88;
-            margin-top: 20px;
+            margin-top: 16px;
         }
 
-        @media (max-width: 768px) {
-            .data-grid {
-                grid-template-columns: 1fr;
-            }
+        /* ── Direction badges ── */
+        .dir-long { color: #10b981; font-weight: bold; }
+        .dir-short { color: #ef4444; font-weight: bold; }
+        .status-open { color: #0ea5e9; font-weight: bold; }
+        .status-closed { color: #555; }
 
-            .mode-buttons {
-                grid-template-columns: 1fr;
-            }
+        @media (max-width: 900px) {
+            .status-grid { grid-template-columns: repeat(2, 1fr); }
+            .instrument-grid { grid-template-columns: repeat(2, 1fr); }
+            .data-grid { grid-template-columns: 1fr; }
+            .stats-bar { grid-template-columns: repeat(3, 1fr); }
+            .mode-buttons { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 600px) {
+            .stats-bar { grid-template-columns: repeat(2, 1fr); }
+            .instrument-grid { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>⚡ Autonomous Trading System</h1>
 
-        <!-- Info Box -->
-        <div class="info-box">
-            <strong>How it works:</strong> Select a mode below. System will automatically execute trades without manual clicks. Dashboard auto-refreshes every 2 seconds.
-        </div>
+<!-- ═══════ Header ═══════ -->
+<div class="header">
+    <span style="font-size:22px">⚡</span>
+    <h1>DTR TRADING AGENT</h1>
+</div>
 
-        <!-- Mode Selection -->
-        <div class="mode-section">
-            <h2 style="color: #00ff88; margin-bottom: 15px;">📊 Trading Mode</h2>
-            <div class="mode-buttons">
-                <button class="btn-dtr" onclick="switchMode('dtr')">📊 DTR RULES (Auto)</button>
-                <button class="btn-claude" onclick="switchMode('claude')">🧠 CLAUDE AI (Auto)</button>
-                <button class="btn-halt" onclick="switchMode('halt')">⏹️ HALT</button>
-            </div>
-        </div>
+<!-- ═══════ Tab Bar ═══════ -->
+<div class="tabs">
+    <button class="tab active" onclick="showTab('dashboard', this)">Dashboard</button>
+    <button class="tab" onclick="showTab('positions', this)">Positions</button>
+    <button class="tab" onclick="showTab('trades', this)">Trade History</button>
+</div>
 
-        <!-- Status Cards -->
-        <div class="status-grid">
-            <div class="status-card">
-                <div class="status-label">Current Mode</div>
-                <div class="status-value" id="current-mode">HALTED</div>
-                <div class="status-subtext" id="mode-description">No trading active</div>
-            </div>
+<!-- ═══════════════════════════════════════
+     TAB 1: DASHBOARD
+═══════════════════════════════════════ -->
+<div id="tab-dashboard" class="page active">
 
-            <div class="status-card">
-                <div class="status-label">Auto-Execution</div>
-                <div class="status-value">
-                    <span class="status-monitoring" id="monitoring-indicator"></span>
-                    <span id="auto-status">OFF</span>
-                </div>
-                <div class="status-subtext">Checks every 30 seconds</div>
-            </div>
+    <div class="info-box">
+        <strong>How it works:</strong> Select a mode to auto-execute trades every 30 s. Dashboard refreshes every 3 s.
+    </div>
 
-            <div class="status-card">
-                <div class="status-label">Daily Trades</div>
-                <div class="status-value" id="daily-trades">0/4</div>
-                <div class="status-subtext" id="trades-detail"></div>
-            </div>
-
-            <div class="status-card">
-                <div class="status-label">Last Update</div>
-                <div class="status-value" id="last-update">--:--:--</div>
-                <div class="status-subtext">Auto-refreshing</div>
-            </div>
-        </div>
-
-        <!-- Data Grid -->
-        <div class="data-grid">
-            <!-- Account Data -->
-            <div class="data-card">
-                <div class="data-title">💰 Account</div>
-                <div class="data-item">
-                    <span class="data-label">Balance</span>
-                    <span class="data-value" id="balance">$150K</span>
-                </div>
-                <div class="data-item">
-                    <span class="data-label">Daily P&L</span>
-                    <span class="data-value" id="daily-pnl">+$0</span>
-                </div>
-                <div class="data-item">
-                    <span class="data-label">Positions</span>
-                    <span class="data-value" id="positions">0</span>
-                </div>
-            </div>
-
-            <!-- Performance Data -->
-            <div class="data-card">
-                <div class="data-title">📈 Performance</div>
-                <div class="data-item">
-                    <span class="data-label">Win Rate</span>
-                    <span class="data-value" id="win-rate">--</span>
-                </div>
-                <div class="data-item">
-                    <span class="data-label">Biggest Win</span>
-                    <span class="data-value positive" id="biggest-win">--</span>
-                </div>
-                <div class="data-item">
-                    <span class="data-label">Biggest Loss</span>
-                    <span class="data-value negative" id="biggest-loss">--</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Refresh Indicator -->
-        <div class="refresh-indicator">
-            🔄 Auto-refreshing every 2 seconds • No manual refresh needed
+    <!-- Mode buttons -->
+    <div class="card">
+        <div class="card-title">📊 Trading Mode</div>
+        <div class="mode-buttons">
+            <button class="btn-dtr" onclick="switchMode('dtr')">📊 DTR RULES (AUTO)</button>
+            <button class="btn-claude" onclick="switchMode('claude')">🧠 CLAUDE AI (AUTO)</button>
+            <button class="btn-halt" onclick="switchMode('halt')">⏹ HALT</button>
         </div>
     </div>
 
-    <script>
-        // Base path injected by Flask (empty string when served at root)
-        window.DTR_BASE = '{{ base_path }}';
+    <!-- Status cards -->
+    <div class="status-grid">
+        <div class="status-card">
+            <div class="status-label">Current Mode</div>
+            <div class="status-value" id="current-mode">—</div>
+            <div class="status-subtext" id="mode-description">Loading…</div>
+        </div>
+        <div class="status-card">
+            <div class="status-label">Auto-Execution</div>
+            <div class="status-value">
+                <span class="dot dot-grey" id="exec-dot"></span>
+                <span id="auto-status">OFF</span>
+            </div>
+            <div class="status-subtext">Checks every 30 s</div>
+        </div>
+        <div class="status-card">
+            <div class="status-label">Daily Trades</div>
+            <div class="status-value" id="daily-trades">0/4</div>
+            <div class="status-subtext" id="trades-detail"></div>
+        </div>
+        <div class="status-card">
+            <div class="status-label">Last Update</div>
+            <div class="status-value" id="last-update">—</div>
+            <div class="status-subtext">Auto-refreshing</div>
+        </div>
+    </div>
 
-        // Auto-refresh every 2 seconds
-        setInterval(updateDashboard, 2000);
+    <!-- Account + Performance -->
+    <div class="data-grid">
+        <div class="card" style="margin-bottom:0">
+            <div class="card-title">💰 Account</div>
+            <div class="data-item">
+                <span class="data-label">Balance</span>
+                <span class="data-value" id="balance">—</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">Daily P&amp;L</span>
+                <span class="data-value" id="daily-pnl">—</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">Open Positions</span>
+                <span class="data-value" id="pos-count">—</span>
+            </div>
+        </div>
+        <div class="card" style="margin-bottom:0">
+            <div class="card-title">📈 Performance</div>
+            <div class="data-item">
+                <span class="data-label">Win Rate</span>
+                <span class="data-value" id="win-rate">—</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">Biggest Win</span>
+                <span class="data-value positive" id="biggest-win">—</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">Biggest Loss</span>
+                <span class="data-value negative" id="biggest-loss">—</span>
+            </div>
+        </div>
+    </div>
 
-        async function switchMode(mode) {
-            try {
-                const endpoint = window.DTR_BASE + (mode === 'dtr' ? '/api/mode/dtr' :
-                                mode === 'claude' ? '/api/mode/claude' :
-                                '/api/mode/halt');
+    <!-- Instrument cards -->
+    <div style="margin-bottom:8px;margin-top:16px">
+        <div class="card-title" style="padding:0 0 8px">🔭 Instruments</div>
+        <div class="instrument-grid" id="instrument-grid">
+            <!-- populated by JS -->
+        </div>
+    </div>
 
-                const res = await fetch(endpoint, { method: 'POST' });
-                const data = await res.json();
+    <!-- Claude Analyse Setup -->
+    <div class="analyse-section">
+        <div class="card-title" style="margin-bottom:8px">🤖 Claude Market Analysis</div>
+        <button class="btn-analyse" id="btn-analyse" onclick="runAnalysis()">
+            🔍 ANALYSE CURRENT SETUP
+        </button>
+        <div class="analyse-result" id="analyse-result">
+            <div class="analyse-result-title">📋 Analysis Result</div>
+            <div id="analyse-decisions"></div>
+            <div id="analyse-summary" class="analyse-reasoning" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(14,165,233,0.1)"></div>
+        </div>
+    </div>
 
-                if (data.success) {
-                    console.log(`Switched to ${mode}`);
-                    updateDashboard();
-                } else {
-                    alert('Error: ' + data.error);
-                }
-            } catch (e) {
-                alert('Error switching mode: ' + e.message);
-            }
+    <div class="refresh-ticker">🔄 Auto-refreshing every 3 s • No manual refresh needed</div>
+</div>
+
+<!-- ═══════════════════════════════════════
+     TAB 2: POSITIONS
+═══════════════════════════════════════ -->
+<div id="tab-positions" class="page">
+    <div class="card">
+        <div class="card-title" style="margin-bottom:14px">📍 Open Positions <span style="color:#555;font-size:10px;margin-left:8px">Auto-refreshes every 5 s</span></div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Instrument</th>
+                        <th>Direction</th>
+                        <th>Size</th>
+                        <th class="td-right">Entry</th>
+                        <th class="td-right">Current</th>
+                        <th class="td-right">Unreal P&amp;L</th>
+                        <th class="td-right">Stop</th>
+                        <th class="td-right">TP1</th>
+                        <th class="td-right">TP2</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="positions-tbody">
+                    <tr><td colspan="10" class="empty-state">Loading positions…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="refresh-ticker" style="margin-top:12px">🔄 Polling every 5 s</div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════
+     TAB 3: TRADE HISTORY
+═══════════════════════════════════════ -->
+<div id="tab-trades" class="page">
+
+    <!-- Stats bar -->
+    <div class="stats-bar" id="stats-bar">
+        <div class="stat-card"><div class="stat-label">Closed Trades</div><div class="stat-value" id="stat-total">—</div></div>
+        <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value" id="stat-winrate">—</div></div>
+        <div class="stat-card"><div class="stat-label">Avg Win</div><div class="stat-value positive" id="stat-avgwin">—</div></div>
+        <div class="stat-card"><div class="stat-label">Avg Loss</div><div class="stat-value negative" id="stat-avgloss">—</div></div>
+        <div class="stat-card"><div class="stat-label">Profit Factor</div><div class="stat-value" id="stat-pf">—</div></div>
+    </div>
+
+    <div class="card">
+        <div class="card-title" style="margin-bottom:14px">📜 Trade History</div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Instrument</th>
+                        <th>Dir</th>
+                        <th>Qty</th>
+                        <th class="td-right">Entry</th>
+                        <th class="td-right">Exit</th>
+                        <th class="td-right">P&amp;L</th>
+                        <th>Session</th>
+                        <th>Status</th>
+                        <th>Journal</th>
+                    </tr>
+                </thead>
+                <tbody id="trades-tbody">
+                    <tr><td colspan="10" class="empty-state">Loading trades…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination" id="pagination">
+            <button class="btn-page" id="btn-prev" onclick="changePage(-1)" disabled>◀ Prev</button>
+            <span id="page-info">Page 1</span>
+            <button class="btn-page" id="btn-next" onclick="changePage(1)" disabled>Next ▶</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════ Journal Modal ═══════ -->
+<div class="modal-overlay" id="journal-modal">
+    <div class="modal">
+        <div class="modal-title">📝 Trade Journal</div>
+        <div class="modal-meta" id="journal-meta"></div>
+        <textarea id="journal-textarea" placeholder="Add your trade notes here…"></textarea>
+        <div class="modal-actions">
+            <span class="saved-badge" id="saved-badge" style="display:none">✓ Saved!</span>
+            <button class="btn-cancel-modal" onclick="closeJournal()">Cancel</button>
+            <button class="btn-save-notes" id="btn-save-notes" onclick="saveNotes()">Save Notes</button>
+        </div>
+    </div>
+</div>
+
+<script>
+window.DTR_BASE = '{{ base_path }}';
+
+// ─── Tab routing ────────────────────────────────────────────────────────────
+function showTab(name, btn) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    btn.classList.add('active');
+    if (name === 'positions') loadPositions();
+    if (name === 'trades') loadTrades();
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+const B = window.DTR_BASE;
+const fmt = v => v == null ? '—' : '$' + Number(v).toFixed(2);
+const fmtP = v => v == null ? '—' : Number(v).toFixed(2);
+
+async function apiFetch(path, opts = {}) {
+    const res = await fetch(B + path, opts);
+    return res.json();
+}
+
+// ─── Dashboard refresh ───────────────────────────────────────────────────────
+async function updateDashboard() {
+    try {
+        const data = await apiFetch('/api/live/dashboard');
+        if (!data.success) return;
+
+        const mode = data.orchestrator.mode;
+        const autoExec = data.orchestrator.auto_executing;
+
+        document.getElementById('current-mode').textContent = mode.toUpperCase();
+
+        const dot = document.getElementById('exec-dot');
+        dot.className = 'dot ' + (autoExec ? 'dot-green' : 'dot-grey');
+        document.getElementById('auto-status').textContent = autoExec ? 'ON' : 'OFF';
+
+        const descs = { dtr: '🔄 Auto-executing on DTR stage 5', claude: '🧠 Auto-executing on Claude signals', halted: '⏹ Trading halted' };
+        document.getElementById('mode-description').textContent = descs[mode] || mode;
+
+        document.getElementById('daily-trades').textContent = '0/4';
+        document.getElementById('last-update').textContent = new Date(data.timestamp).toLocaleTimeString();
+
+        const pl = data.p_and_l || {};
+        const bal = pl.balance;
+        document.getElementById('balance').textContent = bal != null ? '$' + (bal/1000).toFixed(0) + 'K' : '—';
+
+        const dailyPnl = pl.daily_pnl || 0;
+        const pnlEl = document.getElementById('daily-pnl');
+        pnlEl.textContent = (dailyPnl >= 0 ? '+' : '') + '$' + dailyPnl.toFixed(2);
+        pnlEl.className = 'data-value ' + (dailyPnl >= 0 ? 'positive' : 'negative');
+
+        document.getElementById('pos-count').textContent = pl.position_count ?? 0;
+        const wr = pl.win_rate;
+        document.getElementById('win-rate').textContent = wr != null ? (wr * 100).toFixed(0) + '%' : '—';
+    } catch(e) { console.error('dashboard update failed', e); }
+}
+
+// ─── Instrument cards ────────────────────────────────────────────────────────
+async function updateInstruments() {
+    try {
+        const data = await apiFetch('/api/instruments');
+        const instruments = Array.isArray(data) ? data : [];
+        const grid = document.getElementById('instrument-grid');
+        if (instruments.length === 0) {
+            grid.innerHTML = '<div style="color:#555;font-size:12px;padding:10px">No instrument data available</div>';
+            return;
+        }
+        grid.innerHTML = instruments.map(inst => {
+            const pos = inst.position;
+            const hasPosClass = pos ? 'has-position' : '';
+            const badgeClass = pos === 'long' ? 'badge-long' : pos === 'short' ? 'badge-short' : 'badge-flat';
+            const badgeText = pos ? pos.toUpperCase() : 'FLAT';
+            const price = inst.lastPrice != null ? Number(inst.lastPrice).toFixed(2) : '—';
+            const dayPnl = inst.todayPnl != null ? Number(inst.todayPnl) : null;
+            const pnlClass = dayPnl > 0 ? 'positive' : dayPnl < 0 ? 'negative' : '';
+            const pnlText = dayPnl != null ? (dayPnl >= 0 ? '+$' : '-$') + Math.abs(dayPnl).toFixed(2) : '—';
+            return `<div class="instrument-card ${hasPosClass}">
+                <div class="inst-symbol">${inst.symbol || inst.instrument || '—'}</div>
+                <div class="inst-price">${price}</div>
+                <div class="inst-pnl ${pnlClass}">Today: ${pnlText}</div>
+                <span class="inst-badge ${badgeClass}">${badgeText}</span>
+            </div>`;
+        }).join('');
+    } catch(e) { console.error('instruments update failed', e); }
+}
+
+// ─── Mode switching ──────────────────────────────────────────────────────────
+async function switchMode(mode) {
+    try {
+        const ep = mode === 'dtr' ? '/api/mode/dtr' : mode === 'claude' ? '/api/mode/claude' : '/api/mode/halt';
+        const data = await apiFetch(ep, { method: 'POST' });
+        if (data.success) { await updateDashboard(); }
+        else { alert('Error: ' + (data.error || JSON.stringify(data))); }
+    } catch(e) { alert('Error switching mode: ' + e.message); }
+}
+
+// ─── Claude analysis ─────────────────────────────────────────────────────────
+async function runAnalysis() {
+    const btn = document.getElementById('btn-analyse');
+    const resultDiv = document.getElementById('analyse-result');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Analysing… (may take ~15 s)';
+
+    try {
+        const data = await apiFetch('/api/claude/analyse', { method: 'POST' });
+        btn.disabled = false;
+        btn.innerHTML = '🔍 ANALYSE CURRENT SETUP';
+        resultDiv.classList.add('visible');
+
+        const decisionsEl = document.getElementById('analyse-decisions');
+        const summaryEl = document.getElementById('analyse-summary');
+
+        // Try to render decisions from the response
+        const decisions = data.decisions || data.trades || [];
+        if (Array.isArray(decisions) && decisions.length > 0) {
+            decisionsEl.innerHTML = decisions.map(d => {
+                const act = (d.action || d.decision || 'skip').toLowerCase();
+                const cls = act === 'long' ? 'decision-long' : act === 'short' ? 'decision-short' : act === 'close' ? 'decision-close' : 'decision-skip';
+                return `<div class="decision-row">
+                    <span class="decision-symbol">${d.symbol || d.instrument || ''}</span>
+                    <span class="decision-badge ${cls}">${act.toUpperCase()}</span>
+                </div>`;
+            }).join('');
+        } else {
+            // If no structured decisions, show a placed/skipped summary
+            const placed = data.tradesPlaced || data.placed || 0;
+            const skipped = data.skipped || 0;
+            decisionsEl.innerHTML = `<div class="decision-row"><span class="decision-symbol">Result</span><span style="color:#00ff88">${placed} trade(s) placed${skipped ? ', ' + skipped + ' skipped' : ''}</span></div>`;
         }
 
-        async function updateDashboard() {
-            try {
-                const res = await fetch(window.DTR_BASE + '/api/live/dashboard');
-                const data = await res.json();
+        summaryEl.textContent = data.reasoning || data.summary || data.message || '';
+    } catch(e) {
+        btn.disabled = false;
+        btn.innerHTML = '🔍 ANALYSE CURRENT SETUP';
+        resultDiv.classList.add('visible');
+        document.getElementById('analyse-decisions').innerHTML = '<div style="color:#ef4444">Error: ' + e.message + '</div>';
+        document.getElementById('analyse-summary').textContent = '';
+    }
+}
 
-                if (!data.success) return;
+// ─── Positions ───────────────────────────────────────────────────────────────
+let positionsPollTimer = null;
 
-                // Update mode
-                const mode = data.orchestrator.mode;
-                document.getElementById('current-mode').textContent = mode.toUpperCase();
+async function loadPositions() {
+    try {
+        const data = await apiFetch('/api/positions');
+        const positions = Array.isArray(data) ? data : (data.positions || []);
+        renderPositions(positions);
+    } catch(e) {
+        document.getElementById('positions-tbody').innerHTML = '<tr><td colspan="10" class="empty-state">Error loading positions: ' + e.message + '</td></tr>';
+    }
+}
 
-                // Update auto-execution status
-                const autoExecuting = data.orchestrator.auto_executing;
-                document.getElementById('auto-status').textContent = autoExecuting ? 'ON' : 'OFF';
-                const indicator = document.getElementById('monitoring-indicator');
-                indicator.style.background = autoExecuting ? '#10b981' : '#888';
+function renderPositions(positions) {
+    const tbody = document.getElementById('positions-tbody');
+    if (!positions || positions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No open positions</td></tr>';
+        return;
+    }
+    tbody.innerHTML = positions.map(p => {
+        const dirClass = p.direction === 'long' ? 'dir-long' : 'dir-short';
+        const pnlClass = (p.unrealizedPnl || 0) >= 0 ? 'positive' : 'negative';
+        return `<tr>
+            <td class="td-mono">${p.instrument}</td>
+            <td class="${dirClass}">${(p.direction||'').toUpperCase()}</td>
+            <td>${p.size ?? '—'}</td>
+            <td class="td-right td-mono">${fmtP(p.entryPrice)}</td>
+            <td class="td-right td-mono">${fmtP(p.currentPrice)}</td>
+            <td class="td-right td-mono ${pnlClass}">${fmt(p.unrealizedPnl)}</td>
+            <td class="td-right td-mono">${p.stopPrice != null ? fmtP(p.stopPrice) : '—'}</td>
+            <td class="td-right td-mono">${p.tp1Price != null ? fmtP(p.tp1Price) : '—'}</td>
+            <td class="td-right td-mono">${p.tp2Price != null ? fmtP(p.tp2Price) : '—'}</td>
+            <td>
+                <button class="btn-close-pos" onclick="closePosition('${p.instrument}', this)">CLOSE</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
 
-                // Update mode description
-                const descriptions = {
-                    'dtr': '🔄 Auto-executing on DTR stage 5',
-                    'claude': '🧠 Auto-executing on Claude signals + Bias exit',
-                    'halted': '⏹️ Trading halted'
-                };
-                document.getElementById('mode-description').textContent = descriptions[mode];
-
-                // Update daily trades (use values from p_and_l if available)
-                const dtrTrades = (data.orchestrator.daily_trades || {}).dtr || 0;
-                const claudeTrades = (data.orchestrator.daily_trades || {}).claude || 0;
-                const total = dtrTrades + claudeTrades;
-                document.getElementById('daily-trades').textContent = `${total}/4`;
-                document.getElementById('trades-detail').textContent = `DTR: ${dtrTrades}, Claude: ${claudeTrades}`;
-
-                // Update last update time
-                const timestamp = new Date(data.timestamp);
-                document.getElementById('last-update').textContent = timestamp.toLocaleTimeString();
-
-                // Update P&L data
-                if (data.p_and_l) {
-                    const bal = data.p_and_l.balance;
-                    document.getElementById('balance').textContent =
-                        (bal != null) ? '$' + (bal / 1000).toFixed(0) + 'K' : '--';
-
-                    const dailyPnL = data.p_and_l.daily_pnl || 0;
-                    const pnlElement = document.getElementById('daily-pnl');
-                    pnlElement.textContent = (dailyPnL >= 0 ? '+' : '') + '$' + dailyPnL.toFixed(0);
-                    pnlElement.className = 'data-value ' + (dailyPnL >= 0 ? 'positive' : 'negative');
-
-                    document.getElementById('positions').textContent = data.p_and_l.position_count ?? 0;
-                    const wr = data.p_and_l.win_rate;
-                    document.getElementById('win-rate').textContent =
-                        (wr != null) ? (wr * 100).toFixed(0) + '%' : '0%';
-                }
-
-            } catch (e) {
-                console.error('Error updating dashboard:', e);
-            }
+async function closePosition(symbol, btn) {
+    if (!confirm(`Close position for ${symbol}?`)) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+        const data = await apiFetch('/api/positions/' + symbol + '/close', { method: 'POST' });
+        if (data.success) { await loadPositions(); }
+        else {
+            btn.disabled = false;
+            btn.textContent = 'CLOSE';
+            alert('Failed: ' + (data.message || data.error));
         }
+    } catch(e) {
+        btn.disabled = false;
+        btn.textContent = 'CLOSE';
+        alert('Error: ' + e.message);
+    }
+}
 
-        // Initial update
-        updateDashboard();
-    </script>
+// ─── Trades ───────────────────────────────────────────────────────────────────
+let tradesPage = 1;
+const PAGE_SIZE = 15;
+let totalTrades = 0;
+
+async function loadTrades() {
+    try {
+        const data = await apiFetch(`/api/trades?page=${tradesPage}&pageSize=${PAGE_SIZE}`);
+        renderStats(data.stats);
+        renderTrades(data.trades || []);
+        totalTrades = data.total || 0;
+        const totalPages = Math.max(1, Math.ceil(totalTrades / PAGE_SIZE));
+        document.getElementById('page-info').textContent = `Page ${tradesPage} of ${totalPages}`;
+        document.getElementById('btn-prev').disabled = tradesPage <= 1;
+        document.getElementById('btn-next').disabled = tradesPage >= totalPages;
+    } catch(e) {
+        document.getElementById('trades-tbody').innerHTML = '<tr><td colspan="10" class="empty-state">Error loading trades: ' + e.message + '</td></tr>';
+    }
+}
+
+function renderStats(stats) {
+    if (!stats) return;
+    document.getElementById('stat-total').textContent = stats.totalClosed ?? '—';
+    const wr = stats.totalClosed > 0 ? ((stats.winCount / stats.totalClosed) * 100).toFixed(1) + '%' : '—';
+    document.getElementById('stat-winrate').textContent = wr;
+    const avgWin = stats.winCount > 0 ? stats.totalWinPnl / stats.winCount : null;
+    const avgLoss = stats.lossCount > 0 ? Math.abs(stats.totalLossPnl) / stats.lossCount : null;
+    const pf = stats.totalLossPnl < 0 ? (stats.totalWinPnl / Math.abs(stats.totalLossPnl)).toFixed(2) : null;
+    document.getElementById('stat-avgwin').textContent = avgWin != null ? '+$' + avgWin.toFixed(2) : '—';
+    document.getElementById('stat-avgloss').textContent = avgLoss != null ? '-$' + avgLoss.toFixed(2) : '—';
+    document.getElementById('stat-pf').textContent = pf ?? '—';
+}
+
+function renderTrades(trades) {
+    const tbody = document.getElementById('trades-tbody');
+    if (!trades || trades.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No trades recorded yet</td></tr>';
+        return;
+    }
+    let html = '';
+    trades.forEach(t => {
+        const dirClass = t.direction === 'long' ? 'dir-long' : 'dir-short';
+        const pnlClass = (t.pnl || 0) > 0 ? 'positive' : (t.pnl || 0) < 0 ? 'negative' : '';
+        const pnlText = t.pnl != null ? ((t.pnl >= 0 ? '+' : '') + '$' + Number(t.pnl).toFixed(2)) : '—';
+        const dateStr = t.entryTime ? new Date(t.entryTime).toLocaleString('en-US', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+        const statusClass = t.status === 'open' ? 'status-open' : 'status-closed';
+        const showJournal = t.status === 'closed';
+        const journalIcon = showJournal ? `<button class="btn-journal ${t.notes ? 'has-notes' : ''}" onclick='openJournal(${JSON.stringify(t)})' title="${t.notes ? 'View/edit notes' : 'Add note'}">📝</button>` : '';
+
+        html += `<tr>
+            <td class="td-mono" style="white-space:nowrap;font-size:11px">${dateStr}</td>
+            <td class="td-mono">${t.instrument}</td>
+            <td class="${dirClass}">${(t.direction||'').toUpperCase()}</td>
+            <td>${t.qty ?? '—'}</td>
+            <td class="td-right td-mono">${fmtP(t.entryPrice)}</td>
+            <td class="td-right td-mono">${t.exitPrice != null ? fmtP(t.exitPrice) : '—'}</td>
+            <td class="td-right td-mono ${pnlClass}">${pnlText}</td>
+            <td style="font-size:11px;color:#666">${t.session || '—'}</td>
+            <td class="${statusClass}" style="font-size:11px">${(t.status||'').toUpperCase()}</td>
+            <td>${journalIcon}</td>
+        </tr>`;
+
+        if (t.notes) {
+            html += `<tr class="notes-preview-row"><td colspan="10">📌 ${escHtml(t.notes)}</td></tr>`;
+        }
+    });
+    tbody.innerHTML = html;
+}
+
+function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function changePage(dir) {
+    tradesPage = Math.max(1, tradesPage + dir);
+    loadTrades();
+}
+
+// ─── Journal modal ────────────────────────────────────────────────────────────
+let journalTradeId = null;
+
+function openJournal(trade) {
+    journalTradeId = trade.id;
+    const dateStr = trade.entryTime ? new Date(trade.entryTime).toLocaleString() : '';
+    document.getElementById('journal-meta').textContent =
+        `${trade.instrument} · ${(trade.direction||'').toUpperCase()} · ${dateStr}`;
+    document.getElementById('journal-textarea').value = trade.notes || '';
+    document.getElementById('saved-badge').style.display = 'none';
+    document.getElementById('btn-save-notes').disabled = false;
+    document.getElementById('journal-modal').classList.add('open');
+}
+
+function closeJournal() {
+    document.getElementById('journal-modal').classList.remove('open');
+    journalTradeId = null;
+}
+
+async function saveNotes() {
+    const notes = document.getElementById('journal-textarea').value.trim() || null;
+    const btn = document.getElementById('btn-save-notes');
+    btn.disabled = true;
+    try {
+        const data = await apiFetch('/api/trades/' + journalTradeId + '/notes', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes }),
+        });
+        if (data.success) {
+            document.getElementById('saved-badge').style.display = 'inline';
+            setTimeout(() => {
+                document.getElementById('saved-badge').style.display = 'none';
+                closeJournal();
+                loadTrades();
+            }, 1500);
+        } else {
+            alert('Save failed: ' + (data.message || data.error || JSON.stringify(data)));
+            btn.disabled = false;
+        }
+    } catch(e) {
+        alert('Error: ' + e.message);
+        btn.disabled = false;
+    }
+}
+
+// Close modal on overlay click
+document.getElementById('journal-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeJournal();
+});
+
+// ─── Polling orchestration ────────────────────────────────────────────────────
+function getActiveTab() {
+    const active = document.querySelector('.page.active');
+    return active ? active.id.replace('tab-', '') : 'dashboard';
+}
+
+function startPolling() {
+    // Dashboard: every 3s
+    setInterval(() => {
+        if (getActiveTab() === 'dashboard') {
+            updateDashboard();
+            updateInstruments();
+        }
+    }, 3000);
+
+    // Positions: every 5s
+    setInterval(() => {
+        if (getActiveTab() === 'positions') loadPositions();
+    }, 5000);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+updateDashboard();
+updateInstruments();
+startPolling();
+</script>
 </body>
 </html>
