@@ -69,34 +69,43 @@ def _agent_headers() -> dict:
     }
 
 
-def _ts_get(path: str, params: dict = None, timeout: int = 10) -> dict:
-    """GET from the TypeScript API. All routes are mounted under /api."""
+def _ts_request(method: str, path: str, params: dict = None, data: dict = None, timeout: int = 10):
+    """Generic TypeScript API proxy helper.
+
+    Returns ``(body: dict, upstream_status: int)``.
+    On transport error returns ``({"error": ...}, 502)``.
+    """
+    url = f"{TS_API}/api{path}"
     try:
-        r = requests.get(
-            f"{TS_API}/api{path}",
+        r = requests.request(
+            method,
+            url,
             headers=_agent_headers(),
             params=params,
+            json=data if method in ("POST", "PUT", "PATCH") else None,
             timeout=timeout,
         )
-        return r.json()
+        body = r.json() if r.content else {}
+        return body, r.status_code
     except Exception as e:
-        logger.error(f"TS API GET /api{path} failed: {e}")
-        return {"error": str(e)}
+        logger.error(f"TS API {method} /api{path} failed: {e}")
+        return {"error": str(e)}, 502
+
+
+def _ts_get(path: str, params: dict = None, timeout: int = 10) -> dict:
+    """GET from the TypeScript API — returns body dict only (status ignored).
+    Use for internal helpers that don't need to propagate HTTP status.
+    """
+    body, _ = _ts_request("GET", path, params=params, timeout=timeout)
+    return body
 
 
 def _ts_post(path: str, data: dict = None, timeout: int = 30) -> dict:
-    """POST to the TypeScript API. All routes are mounted under /api."""
-    try:
-        r = requests.post(
-            f"{TS_API}/api{path}",
-            json=data or {},
-            headers=_agent_headers(),
-            timeout=timeout,
-        )
-        return r.json()
-    except Exception as e:
-        logger.error(f"TS API POST /api{path} failed: {e}")
-        return {"error": str(e)}
+    """POST to the TypeScript API — returns body dict only (status ignored).
+    Use for internal helpers (mode switches, etc.) that handle errors via payload.
+    """
+    body, _ = _ts_request("POST", path, data=data, timeout=timeout)
+    return body
 
 
 def _derive_mode(ts_status: dict) -> tuple:
@@ -276,10 +285,8 @@ def live_dashboard():
 
 @app.route("/api/instruments")
 def get_instruments():
-    resp = _ts_get("/agent/instruments")
-    if "error" in resp:
-        return jsonify({"error": resp["error"]}), 502
-    return jsonify(resp)
+    body, status = _ts_request("GET", "/agent/instruments")
+    return jsonify(body), status
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -288,18 +295,14 @@ def get_instruments():
 
 @app.route("/api/positions")
 def get_positions():
-    resp = _ts_get("/positions")
-    if isinstance(resp, dict) and "error" in resp:
-        return jsonify({"error": resp["error"]}), 502
-    return jsonify(resp)
+    body, status = _ts_request("GET", "/positions")
+    return jsonify(body), status
 
 
 @app.route("/api/positions/<symbol>/close", methods=["POST"])
 def close_position(symbol: str):
-    resp = _ts_post(f"/positions/{symbol.upper()}/close")
-    if "error" in resp:
-        return jsonify({"success": False, "error": resp["error"]}), 502
-    return jsonify(resp)
+    body, status = _ts_request("POST", f"/positions/{symbol.upper()}/close")
+    return jsonify(body), status
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -308,35 +311,15 @@ def close_position(symbol: str):
 
 @app.route("/api/trades")
 def get_trades():
-    params = {}
-    if request.args.get("page"):
-        params["page"] = request.args["page"]
-    if request.args.get("pageSize"):
-        params["pageSize"] = request.args["pageSize"]
-    if request.args.get("instrument"):
-        params["instrument"] = request.args["instrument"]
-    resp = _ts_get("/trades", params=params)
-    if isinstance(resp, dict) and "error" in resp:
-        return jsonify({"error": resp["error"]}), 502
-    return jsonify(resp)
+    params = {k: request.args[k] for k in ("page", "pageSize", "instrument") if k in request.args}
+    body, status = _ts_request("GET", "/trades", params=params)
+    return jsonify(body), status
 
 
 @app.route("/api/trades/<int:trade_id>/notes", methods=["PATCH"])
 def patch_trade_notes(trade_id: int):
-    data = request.json or {}
-    try:
-        r = requests.patch(
-            f"{TS_API}/api/trades/{trade_id}/notes",
-            json=data,
-            headers=_agent_headers(),
-            timeout=10,
-        )
-        body = r.json() if r.content else {}
-        status = r.status_code if r.status_code != 200 else 200
-        return jsonify(body), status
-    except Exception as e:
-        logger.error(f"TS API PATCH /api/trades/{trade_id}/notes failed: {e}")
-        return jsonify({"success": False, "error": str(e)}), 502
+    body, status = _ts_request("PATCH", f"/trades/{trade_id}/notes", data=request.json or {})
+    return jsonify(body), status
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -345,10 +328,8 @@ def patch_trade_notes(trade_id: int):
 
 @app.route("/api/claude/analyse", methods=["POST"])
 def claude_analyse():
-    resp = _ts_post("/agent/claude-trade", timeout=60)
-    if "error" in resp:
-        return jsonify({"success": False, "error": resp["error"]}), 502
-    return jsonify(resp)
+    body, status = _ts_request("POST", "/agent/claude-trade", timeout=60)
+    return jsonify(body), status
 
 
 # ═══════════════════════════════════════════════════════════════════════════
