@@ -20,7 +20,8 @@ import {
 } from "./dtr-strategy";
 import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, type ClaudeAdvice } from "./claude-advisor";
 import { checkAtrPullbackSignal, DEFAULT_ATR_PULLBACK_PARAMS } from "./atr-pullback-strategy";
-import { db, tradesTable, dailySummaryTable } from "@workspace/db";
+import { db, tradesTable, dailySummaryTable, instrumentConfigsTable } from "@workspace/db";
+import type { InstrumentConfig as DbInstrumentConfigRow } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 
 export type SessionPhase =
@@ -100,11 +101,121 @@ class AgentController {
     maxLossesPerDirection?: number;
     tradingLocked?: boolean;
   } = {};
+  // DB-driven instrument configs (refreshed on startup and every 5 minutes)
+  private dbConfigs: Map<string, DbInstrumentConfigRow> = new Map();
+  private lastDbConfigRefresh = 0;
+  private readonly DB_CONFIG_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
   constructor() {
-    // Initialize instrument states
-    for (const symbol of Object.keys(TRADING_CONFIG.instruments)) {
-      this.instrumentStates.set(symbol, createInstrumentState(symbol));
+    // InstrumentStates are populated after DB load in loadInstrumentConfigsFromDb().
+    // Static TRADING_CONFIG is only used as seed source, not for live decisions.
+  }
+
+  /**
+   * Returns the effective config for an instrument from DB only.
+   * The DB is the sole source of truth for live trading decisions.
+   * Static TRADING_CONFIG is ONLY used as a seed source on first startup.
+   * Returns null if the instrument is not present in DB (e.g. deleted).
+   */
+  private getEffectiveConfig(symbol: string) {
+    const dbRow = this.dbConfigs.get(symbol);
+    if (!dbRow) return null;
+    // Static config used ONLY for fields not yet in DB schema (strategy-specific params).
+    const staticCfg = TRADING_CONFIG.instruments[symbol];
+    return {
+      symbol: dbRow.symbol,
+      name: dbRow.name,
+      enabled: dbRow.enabled,
+      qty: dbRow.qty,
+      pointValue: dbRow.pointValue,
+      minTick: dbRow.minTick,
+      maxTradesPerDay: dbRow.maxTradesPerDay,
+      strategyMode: dbRow.strategyMode as "dtr" | "atr_pullback",
+      sessionStart: dbRow.sessionStart,
+      sessionEnd: dbRow.sessionEnd,
+      // Strategy-specific fields not yet in DB — use static config if available, else defaults
+      tp1Qty: staticCfg?.tp1Qty ?? 1,
+      maxLossesPerDirection: staticCfg?.maxLossesPerDirection ?? 2,
+      biasCandle_atrMult: staticCfg?.biasCandle_atrMult ?? 0.5,
+      slAtrBuffer: staticCfg?.slAtrBuffer ?? 0.0,
+      tpMode: (staticCfg?.tpMode ?? "Range Target") as "Range Target",
+      londonRangeStart: staticCfg?.londonRangeStart ?? "01:12",
+      londonRangeEnd: staticCfg?.londonRangeEnd ?? "02:13",
+      londonEntryStart: staticCfg?.londonEntryStart ?? "03:13",
+      londonEntryEnd: staticCfg?.londonEntryEnd ?? "07:00",
+      nyRangeStart: staticCfg?.nyRangeStart ?? "08:12",
+      nyRangeEnd: staticCfg?.nyRangeEnd ?? "09:13",
+    };
+  }
+
+  /**
+   * Seed DB with the 4 static instruments from TRADING_CONFIG ONLY when the
+   * instrument_configs table is completely empty (i.e., very first run).
+   * Subsequent startups skip seeding so user deletions and edits persist.
+   */
+  private async seedInstrumentConfigs(): Promise<void> {
+    const existing = await db.select().from(instrumentConfigsTable);
+    if (existing.length > 0) {
+      logger.info({ count: existing.length }, "DB already has instrument configs — skipping seed");
+      return;
+    }
+    for (const cfg of Object.values(TRADING_CONFIG.instruments)) {
+      await db.insert(instrumentConfigsTable).values({
+        symbol: cfg.symbol,
+        name: cfg.name,
+        enabled: cfg.enabled,
+        qty: cfg.qty,
+        pointValue: cfg.pointValue,
+        minTick: cfg.minTick,
+        maxTradesPerDay: cfg.maxTradesPerDay,
+        strategyMode: cfg.strategyMode,
+        sessionStart: cfg.nyEntryStart,
+        sessionEnd: cfg.nyEntryEnd,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+    logger.info({ count: Object.keys(TRADING_CONFIG.instruments).length }, "Seeded instrument configs from TRADING_CONFIG (first run)");
+  }
+
+  /**
+   * Load all instrument configs from DB into memory. Initializes instrumentStates
+   * for any symbols not yet present (e.g. newly-added instruments).
+   */
+  async loadInstrumentConfigsFromDb(): Promise<void> {
+    const rows = await db.select().from(instrumentConfigsTable);
+    this.dbConfigs = new Map(rows.map((r) => [r.symbol, r]));
+    // Ensure instrumentStates exists for every DB symbol
+    for (const row of rows) {
+      if (!this.instrumentStates.has(row.symbol)) {
+        this.instrumentStates.set(row.symbol, createInstrumentState(row.symbol));
+      }
+    }
+    // Remove states for symbols deleted from DB (keep state in memory until process restart
+    // to allow existing positions to reconcile — we just won't open new ones)
+    this.lastDbConfigRefresh = Date.now();
+    logger.info({ count: rows.length }, "Loaded instrument configs from DB");
+  }
+
+  /**
+   * Public: called by CRUD API endpoints after a write to immediately reflect changes.
+   */
+  async refreshInstrumentConfigs(): Promise<void> {
+    await this.loadInstrumentConfigsFromDb();
+    // Resolve contract IDs for any new symbols
+    if (this.client) {
+      for (const symbol of this.dbConfigs.keys()) {
+        if (!this.instrumentStates.get(symbol)?.contractId) {
+          try {
+            const contractId = await this.client.getContractId(symbol);
+            const state = this.instrumentStates.get(symbol);
+            if (state) state.contractId = contractId;
+            if (contractId) logger.info({ symbol, contractId }, "Resolved contract ID for new instrument");
+          } catch (err) {
+            logger.warn({ err, symbol }, "Could not resolve contract ID for new instrument");
+          }
+        }
+      }
     }
   }
 
@@ -147,17 +258,23 @@ class AgentController {
     }
   }
 
-  /** Returns effective enabled state, honoring runtime overrides. */
+  /**
+   * Returns effective enabled state from DB only (DB is sole source of truth).
+   * Instruments deleted from DB are not in dbConfigs → returns false.
+   * Runtime overrides (in-memory) take priority for the duration of the process.
+   */
   isInstrumentEnabled(symbol: string): boolean {
     if (this.instrumentEnabledOverrides.has(symbol)) {
       return this.instrumentEnabledOverrides.get(symbol)!;
     }
-    return TRADING_CONFIG.instruments[symbol]?.enabled ?? false;
+    const dbRow = this.dbConfigs.get(symbol);
+    // Not in DB → was deleted or never added; do not fall back to static config
+    return dbRow?.enabled ?? false;
   }
 
   /** Toggle an instrument on or off at runtime without restarting the agent. */
   toggleInstrument(symbol: string, enabled: boolean): { success: boolean; message: string } {
-    if (!TRADING_CONFIG.instruments[symbol]) {
+    if (!this.dbConfigs.has(symbol)) {
       return { success: false, message: `Unknown instrument: ${symbol}` };
     }
     this.instrumentEnabledOverrides.set(symbol, enabled);
@@ -321,7 +438,7 @@ class AgentController {
       .filter(([symbol]) => this.isInstrumentEnabled(symbol))
       .map(([symbol, state]) => ({
         state,
-        config: TRADING_CONFIG.instruments[symbol],
+        config: this.getEffectiveConfig(symbol),
       }))
       .filter(({ config }) => !!config);
 
@@ -371,7 +488,7 @@ class AgentController {
     // Execute decisions
     for (const decision of advice.decisions) {
       const state = this.instrumentStates.get(decision.symbol);
-      const config = TRADING_CONFIG.instruments[decision.symbol];
+      const config = this.getEffectiveConfig(decision.symbol);
       if (!state || !config || !state.contractId) continue;
 
       // Guard: daily limits
@@ -484,7 +601,7 @@ class AgentController {
       .filter(([symbol]) => this.isInstrumentEnabled(symbol))
       .map(([symbol, state]) => ({
         state,
-        config: TRADING_CONFIG.instruments[symbol],
+        config: this.getEffectiveConfig(symbol),
       }))
       .filter(({ config }) => !!config);
 
@@ -538,7 +655,7 @@ class AgentController {
 
       for (const decision of advice.decisions) {
         const state = this.instrumentStates.get(decision.symbol);
-        const config = TRADING_CONFIG.instruments[decision.symbol];
+        const config = this.getEffectiveConfig(decision.symbol);
         if (!state || !config || !state.contractId) continue;
 
         if (decision.action === "close") {
@@ -670,7 +787,7 @@ class AgentController {
       if (decision.action === "skip") continue;
 
       const state = this.instrumentStates.get(decision.symbol);
-      const config = TRADING_CONFIG.instruments[decision.symbol];
+      const config = this.getEffectiveConfig(decision.symbol);
       if (!state || !config || !state.contractId) continue;
       if (state.inPosition) {
         logger.info({ symbol: decision.symbol }, "Skipping Claude trade — already in position");
@@ -797,6 +914,10 @@ class AgentController {
     // Load or create today's summary
     await this.loadDailySummary();
 
+    // Seed DB with static instruments if first run, then load from DB
+    await this.seedInstrumentConfigs();
+    await this.loadInstrumentConfigsFromDb();
+
     // Resolve contract IDs for all instruments
     await this.resolveContractIds();
 
@@ -886,13 +1007,13 @@ class AgentController {
 
   getInstrumentStatuses(): InstrumentStatusData[] {
     return Array.from(this.instrumentStates.values()).map((state) => {
-      const config = TRADING_CONFIG.instruments[state.symbol];
+      const config = this.getEffectiveConfig(state.symbol);
       // Find matching open position from cache
       const openPos = this.openPositionsCache.find(
         (p) => state.contractId !== null && p.contractId === state.contractId
       );
       let unrealizedPnl: number | null = null;
-      if (openPos && state.lastPrice && state.positionEntryPrice) {
+      if (openPos && state.lastPrice && state.positionEntryPrice && config) {
         const dir = state.positionDirection;
         if (dir) {
           const priceDiff =
@@ -971,15 +1092,19 @@ class AgentController {
 
   private async resolveContractIds(): Promise<void> {
     if (!this.client) return;
-    for (const symbol of Object.keys(TRADING_CONFIG.instruments)) {
+    // DB is sole source of truth — only resolve IDs for DB-configured instruments
+    const symbols = Array.from(this.dbConfigs.keys());
+    for (const symbol of symbols) {
       try {
         const contractId = await this.client.getContractId(symbol);
-        const state = this.instrumentStates.get(symbol)!;
-        state.contractId = contractId;
-        if (contractId) {
-          logger.info({ symbol, contractId }, "Resolved contract ID");
-        } else {
-          logger.warn({ symbol }, "Could not resolve contract ID");
+        const state = this.instrumentStates.get(symbol);
+        if (state) {
+          state.contractId = contractId;
+          if (contractId) {
+            logger.info({ symbol, contractId }, "Resolved contract ID");
+          } else {
+            logger.warn({ symbol }, "Could not resolve contract ID");
+          }
         }
       } catch (err) {
         logger.error({ err, symbol }, "Error resolving contract ID");
@@ -1141,8 +1266,9 @@ class AgentController {
         logger.info("Trading lock cleared on day rollover");
       }
 
-      // Reset instrument states
-      for (const symbol of Object.keys(TRADING_CONFIG.instruments)) {
+      // Reset instrument states for all DB-managed symbols
+      const symbols = Array.from(this.dbConfigs.keys());
+      for (const symbol of symbols) {
         this.instrumentStates.set(symbol, {
           ...createInstrumentState(symbol),
           contractId: this.instrumentStates.get(symbol)?.contractId ?? null,
@@ -1153,6 +1279,21 @@ class AgentController {
     }
   }
 
+  /**
+   * Returns the latest sessionEnd across all enabled DTR instruments in DB.
+   * This drives the NY entry window so new instruments with later sessions work correctly.
+   * Falls back to "14:00" if no DTR instruments are configured.
+   */
+  private getNyEntryEnd(): string {
+    let latest = "14:00";
+    for (const row of this.dbConfigs.values()) {
+      if (!row.enabled) continue;
+      if (row.strategyMode === "atr_pullback") continue;
+      if (row.sessionEnd > latest) latest = row.sessionEnd;
+    }
+    return latest;
+  }
+
   private getCurrentPhase(): SessionPhase {
     // London range: 01:12–02:13
     if (isInTimeWindow("01:12", "02:13")) return "london_range";
@@ -1160,10 +1301,12 @@ class AgentController {
     if (isInTimeWindow("03:13", "07:00")) return "london_entry";
     // NY range: 08:12–09:13
     if (isInTimeWindow("08:12", "09:13")) return "ny_range";
-    // NY entry: 09:13–14:00
-    if (isInTimeWindow("09:13", "14:00")) return "ny_entry";
-    // EOD flat: 14:00–20:00 (close out)
-    if (isInTimeWindow("14:00", "20:00")) return "eod_flat";
+    // NY entry: 09:13 until the latest sessionEnd across all enabled DTR instruments (from DB).
+    // Per-instrument DB session windows are the primary gate within this broader phase.
+    const nyEntryEnd = this.getNyEntryEnd();
+    if (isInTimeWindow("09:13", nyEntryEnd)) return "ny_entry";
+    // EOD flat: from nyEntryEnd until 21:00 (close out all remaining positions)
+    if (isInTimeWindow(nyEntryEnd, "21:00")) return "eod_flat";
     return "idle";
   }
 
@@ -1171,6 +1314,11 @@ class AgentController {
     if (!this.running || !this.client) return;
 
     await this.checkDayRollover();
+
+    // Refresh DB instrument configs every 5 minutes
+    if (Date.now() - this.lastDbConfigRefresh > this.DB_CONFIG_REFRESH_INTERVAL_MS) {
+      await this.loadInstrumentConfigsFromDb();
+    }
 
     this.lastUpdated = new Date().toISOString();
 
@@ -1275,18 +1423,17 @@ class AgentController {
   }
 
   /**
-   * CCHOAS21 ATR Volume Pullback — runs for MYMM6 (US30) and MNQM6 (Nas100) only.
-   * Session window: 09:30–15:30 NY. Independent of DTR phase state machine.
+   * CCHOAS21 ATR Volume Pullback — runs for instruments with strategyMode="atr_pullback".
+   * Session window comes from each instrument's DB sessionStart/sessionEnd.
    */
   private async processAtrPullbackSignals(): Promise<void> {
     if (!this.client) return;
 
-    // Only active during 09:30–15:30 NY
-    if (!isInTimeWindow("09:30", "15:30")) return;
-
     for (const [symbol, state] of this.instrumentStates) {
-      const config = TRADING_CONFIG.instruments[symbol];
+      const config = this.getEffectiveConfig(symbol);
       if (config?.strategyMode !== "atr_pullback") continue;
+      // Per-instrument session window from DB is the primary gate for ATR pullback
+      if (!isInTimeWindow(config.sessionStart, config.sessionEnd)) continue;
       if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
       if (state.inPosition) continue;
@@ -1387,7 +1534,7 @@ class AgentController {
       if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
       // ATR pullback instruments don't use the DTR range phase
-      if (TRADING_CONFIG.instruments[symbol]?.strategyMode === "atr_pullback") continue;
+      if (this.getEffectiveConfig(symbol)?.strategyMode === "atr_pullback") continue;
 
       try {
         // Convert NY wall-clock session boundaries to UTC (DST-safe)
@@ -1418,7 +1565,7 @@ class AgentController {
     if (!this.client) return;
 
     for (const [symbol, state] of this.instrumentStates) {
-      const config = TRADING_CONFIG.instruments[symbol];
+      const config = this.getEffectiveConfig(symbol);
       if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
       // ATR pullback instruments are handled by processAtrPullbackSignals, not DTR entry phase
@@ -1426,6 +1573,10 @@ class AgentController {
       if (!state.rangeData) continue;
       if (state.inPosition) continue;
       if (state.todayTrades >= this.effectiveMaxTrades(symbol)) continue;
+      // Per-instrument session window from DB is the primary gate for NY entry
+      if (session === "ny" && config) {
+        if (!isInTimeWindow(config.sessionStart, config.sessionEnd)) continue;
+      }
 
       // Build effective config — runtime overrides fully replace config values when set
       const effectiveConfig = {
@@ -1528,13 +1679,14 @@ class AgentController {
         // Mark trade as closed
         if (state.openTradeId) {
           const lastPrice = state.lastPrice ?? state.positionEntryPrice ?? 0;
+          const flatCfg = this.getEffectiveConfig(symbol);
           const pnl = state.positionDirection && state.positionEntryPrice
             ? calculatePnl(
                 state.positionDirection,
                 state.positionEntryPrice,
                 lastPrice,
                 state.positionQty,
-                TRADING_CONFIG.instruments[symbol]?.pointValue ?? 10
+                flatCfg?.pointValue ?? 10
               )
             : 0;
 
@@ -1550,7 +1702,7 @@ class AgentController {
 
           this.dailyPnl += pnl;
 
-          const instName = TRADING_CONFIG.instruments[symbol]?.name ?? symbol;
+          const instName = flatCfg?.name ?? symbol;
           const closedDir = state.positionDirection;
           this.sendTelegram(
             `${pnl >= 0 ? "✅" : "❌"} <b>TRADE CLOSED (FORCED)</b> · DeclanCapital FX\n\n` +
@@ -1606,15 +1758,15 @@ class AgentController {
           const prevPos = this.previousPositionsCache.find(
             (p) => p.contractId === state.contractId
           );
-          const config = TRADING_CONFIG.instruments[symbol];
           let pnl: number;
           let exitPrice: number;
 
+          const effConfig = this.getEffectiveConfig(symbol);
           if (prevPos && prevPos.realizedPnl !== undefined && prevPos.realizedPnl !== 0) {
             // Use the broker's realized P&L directly
             pnl = prevPos.realizedPnl;
             exitPrice = state.lastPrice ?? state.positionEntryPrice ?? 0;
-          } else if (state.lastPrice && state.positionDirection && state.positionEntryPrice && config) {
+          } else if (state.lastPrice && state.positionDirection && state.positionEntryPrice && effConfig) {
             // Fallback: compute from price diff
             exitPrice = state.lastPrice;
             pnl = calculatePnl(
@@ -1622,7 +1774,7 @@ class AgentController {
               state.positionEntryPrice,
               exitPrice,
               state.positionQty,
-              config.pointValue
+              effConfig.pointValue
             );
           } else {
             exitPrice = state.positionEntryPrice ?? 0;
@@ -1656,7 +1808,7 @@ class AgentController {
           logger.info({ symbol, pnl, exitPrice, direction: state.positionDirection }, "Trade closed");
 
           const closedDir = state.positionDirection;
-          const instName = TRADING_CONFIG.instruments[symbol]?.name ?? symbol;
+          const instName = this.getEffectiveConfig(symbol)?.name ?? symbol;
           this.sendTelegram(
             `${pnl >= 0 ? "✅" : "❌"} <b>TRADE CLOSED</b> · DeclanCapital FX\n\n` +
             `<b>${instName}</b> (${symbol})\n` +

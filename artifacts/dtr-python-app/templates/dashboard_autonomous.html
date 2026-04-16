@@ -587,6 +587,81 @@
             margin-left: 8px;
             vertical-align: middle;
         }
+
+        /* ── Pairs tab ── */
+        .badge-strategy-atr {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 10px; font-weight: bold;
+            background: rgba(245,158,11,0.15); color: #f59e0b;
+            border: 1px solid rgba(245,158,11,0.35);
+        }
+        .badge-strategy-dtr-sm {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 10px; font-weight: bold;
+            background: rgba(16,185,129,0.15); color: #10b981;
+            border: 1px solid rgba(16,185,129,0.35);
+        }
+        .btn-toggle-on {
+            padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: bold;
+            background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4);
+            color: #10b981; cursor: pointer; font-family: 'Courier New', monospace;
+            text-transform: uppercase; transition: background 0.15s;
+        }
+        .btn-toggle-on:hover { background: rgba(16,185,129,0.3); }
+        .btn-toggle-off {
+            padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: bold;
+            background: rgba(100,100,100,0.15); border: 1px solid rgba(100,100,100,0.35);
+            color: #666; cursor: pointer; font-family: 'Courier New', monospace;
+            text-transform: uppercase; transition: background 0.15s;
+        }
+        .btn-toggle-off:hover { background: rgba(100,100,100,0.25); }
+        .btn-edit-pair {
+            padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: bold;
+            background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.35);
+            color: #3b82f6; cursor: pointer; font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+        }
+        .btn-edit-pair:hover { background: rgba(59,130,246,0.25); }
+        .btn-del-pair {
+            padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: bold;
+            background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.35);
+            color: #ef4444; cursor: pointer; font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+        }
+        .btn-del-pair:hover { background: rgba(239,68,68,0.25); }
+        .btn-add-pair {
+            padding: 10px 20px; border-radius: 6px; font-size: 12px; font-weight: bold;
+            background: rgba(0,255,136,0.12); border: 1px solid rgba(0,255,136,0.35);
+            color: #00ff88; cursor: pointer; font-family: 'Courier New', monospace;
+            text-transform: uppercase; letter-spacing: 1px;
+        }
+        .btn-add-pair:hover { background: rgba(0,255,136,0.2); }
+        .pair-modal {
+            background: #0f1419; border: 1px solid rgba(0,255,136,0.3);
+            border-radius: 10px; padding: 24px; width: 520px; max-width: 96vw;
+        }
+        .pair-modal-title { color: #00ff88; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 18px; }
+        .pair-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .pair-field { display: flex; flex-direction: column; gap: 5px; }
+        .pair-field label { color: #888; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .pair-field input, .pair-field select {
+            background: rgba(0,0,0,0.5); border: 1px solid rgba(0,255,136,0.2);
+            border-radius: 5px; color: #e0e0e0; font-family: 'Courier New', monospace;
+            font-size: 12px; padding: 8px 10px; outline: none;
+        }
+        .pair-field input:focus, .pair-field select:focus { border-color: rgba(0,255,136,0.5); }
+        .pair-field.full { grid-column: 1 / -1; }
+        .btn-pair-save {
+            padding: 9px 20px; background: rgba(0,255,136,0.15); border: 1px solid rgba(0,255,136,0.4);
+            color: #00ff88; border-radius: 6px; font-size: 12px; font-weight: bold;
+            cursor: pointer; font-family: 'Courier New', monospace;
+        }
+        .btn-pair-save:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-pair-cancel {
+            padding: 9px 20px; background: rgba(0,0,0,0.3); border: 1px solid rgba(0,255,136,0.15);
+            color: #666; border-radius: 6px; font-size: 12px; cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
     </style>
 </head>
 <body>
@@ -603,6 +678,7 @@
     <button class="tab active" onclick="showTab('dashboard', this)">Dashboard</button>
     <button class="tab" onclick="showTab('positions', this)">Positions</button>
     <button class="tab" onclick="showTab('trades', this)">Trade History</button>
+    <button class="tab" onclick="showTab('pairs', this)">⚙ Pairs</button>
 </div>
 
 <!-- ═══════════════════════════════════════
@@ -838,6 +914,91 @@
     </div>
 </div>
 
+<!-- ═══════════════════════════════════════
+     TAB 4: PAIRS MANAGER
+═══════════════════════════════════════ -->
+<div id="tab-pairs" class="page">
+    <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div class="card-title" style="margin-bottom:0">⚙ Instrument Pairs</div>
+            <button class="btn-add-pair" onclick="openPairModal(null)">+ Add Pair</button>
+        </div>
+        <div class="table-wrap">
+            <table id="pairs-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Name</th>
+                        <th>Strategy</th>
+                        <th>Session (NY)</th>
+                        <th style="text-align:right">Qty</th>
+                        <th>Enabled</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="pairs-tbody">
+                    <tr><td colspan="7" class="empty-state">Loading pairs…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="info-box" style="font-size:11px">
+        <strong>Note:</strong> Changes take effect on the next agent tick (~30 s). Deleting a pair stops new entries but does <em>not</em> force-close open positions.
+    </div>
+</div>
+
+<!-- ═══════ Pairs Modal ═══════ -->
+<div class="modal-overlay" id="pair-modal">
+    <div class="pair-modal">
+        <div class="pair-modal-title" id="pair-modal-title">Add Instrument</div>
+        <div class="pair-form-grid">
+            <div class="pair-field">
+                <label>Symbol *</label>
+                <input id="pf-symbol" type="text" placeholder="e.g. MNQM6" maxlength="20">
+            </div>
+            <div class="pair-field">
+                <label>Name *</label>
+                <input id="pf-name" type="text" placeholder="e.g. Micro NQ" maxlength="60">
+            </div>
+            <div class="pair-field">
+                <label>Strategy</label>
+                <select id="pf-strategy">
+                    <option value="dtr">DTR Rules</option>
+                    <option value="atr_pullback">ATR Pullback</option>
+                </select>
+            </div>
+            <div class="pair-field">
+                <label>Qty (contracts)</label>
+                <input id="pf-qty" type="number" min="1" step="1" value="1">
+            </div>
+            <div class="pair-field">
+                <label>Session Start (HH:MM NY)</label>
+                <input id="pf-session-start" type="text" placeholder="09:13" maxlength="5">
+            </div>
+            <div class="pair-field">
+                <label>Session End (HH:MM NY)</label>
+                <input id="pf-session-end" type="text" placeholder="14:00" maxlength="5">
+            </div>
+            <div class="pair-field">
+                <label>Point Value</label>
+                <input id="pf-point-value" type="number" step="0.01" value="1.0">
+            </div>
+            <div class="pair-field">
+                <label>Min Tick</label>
+                <input id="pf-min-tick" type="number" step="0.01" value="0.25">
+            </div>
+            <div class="pair-field full">
+                <label>Max Daily Trades</label>
+                <input id="pf-max-trades" type="number" min="1" step="1" value="4">
+            </div>
+        </div>
+        <div class="modal-actions" style="margin-top:18px">
+            <button class="btn-pair-cancel" onclick="closePairModal()">Cancel</button>
+            <button class="btn-pair-save" id="btn-pair-save" onclick="savePair()">Save</button>
+        </div>
+    </div>
+</div>
+
 <!-- ═══════ Journal Modal ═══════ -->
 <div class="modal-overlay" id="journal-modal">
     <div class="modal">
@@ -867,6 +1028,7 @@ function showTab(name, btn) {
     btn.classList.add('active');
     if (name === 'positions') loadPositions();
     if (name === 'trades') loadTrades();
+    if (name === 'pairs') loadPairs();
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -1348,6 +1510,135 @@ async function exportTrades(format) {
         alert('Export failed: ' + e.message);
     }
 }
+
+// ─── Pairs manager ───────────────────────────────────────────────────────────
+let pairEditSymbol = null;
+const pairsById = {};
+
+async function loadPairs() {
+    try {
+        const pairs = await apiFetch('/api/instrument-configs');
+        renderPairs(Array.isArray(pairs) ? pairs : []);
+    } catch(e) {
+        document.getElementById('pairs-tbody').innerHTML =
+            '<tr><td colspan="7" class="empty-state">Error loading pairs: ' + escHtml(e.message) + '</td></tr>';
+    }
+}
+
+function renderPairs(pairs) {
+    Object.keys(pairsById).forEach(k => delete pairsById[k]);
+    pairs.forEach(p => { pairsById[p.symbol] = p; });
+    const tbody = document.getElementById('pairs-tbody');
+    if (!pairs.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No instruments configured yet. Add your first pair above.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = pairs.map(p => {
+        const stratBadge = p.strategyMode === 'atr_pullback'
+            ? '<span class="badge-strategy-atr">ATR Pullback</span>'
+            : '<span class="badge-strategy-dtr-sm">DTR</span>';
+        const toggleClass = p.enabled ? 'btn-toggle-on' : 'btn-toggle-off';
+        const toggleLabel = p.enabled ? 'ON' : 'OFF';
+        return `<tr>
+            <td class="td-mono" style="font-weight:bold;color:#00ff88">${escHtml(p.symbol)}</td>
+            <td>${escHtml(p.name)}</td>
+            <td>${stratBadge}</td>
+            <td class="td-mono" style="font-size:11px">${escHtml(p.sessionStart)} – ${escHtml(p.sessionEnd)}</td>
+            <td class="td-right">${p.qty}</td>
+            <td>
+                <button class="${toggleClass}" data-symbol="${escHtml(p.symbol)}" data-new-enabled="${!p.enabled}" onclick="togglePair(this.dataset.symbol, this.dataset.newEnabled === 'true')">${toggleLabel}</button>
+            </td>
+            <td style="display:flex;gap:6px">
+                <button class="btn-edit-pair" data-symbol="${escHtml(p.symbol)}" onclick="openPairModal(pairsById[this.dataset.symbol])">Edit</button>
+                <button class="btn-del-pair" data-symbol="${escHtml(p.symbol)}" onclick="deletePair(this.dataset.symbol)">Delete</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+function openPairModal(pair) {
+    pairEditSymbol = pair ? pair.symbol : null;
+    document.getElementById('pair-modal-title').textContent = pair ? 'Edit Instrument' : 'Add Instrument';
+    document.getElementById('pf-symbol').value = pair ? pair.symbol : '';
+    document.getElementById('pf-symbol').disabled = !!pair;
+    document.getElementById('pf-name').value = pair ? pair.name : '';
+    document.getElementById('pf-strategy').value = pair ? pair.strategyMode : 'dtr';
+    document.getElementById('pf-qty').value = pair ? pair.qty : 1;
+    document.getElementById('pf-session-start').value = pair ? pair.sessionStart : '09:13';
+    document.getElementById('pf-session-end').value = pair ? pair.sessionEnd : '14:00';
+    document.getElementById('pf-point-value').value = pair ? pair.pointValue : 1.0;
+    document.getElementById('pf-min-tick').value = pair ? pair.minTick : 0.25;
+    document.getElementById('pf-max-trades').value = pair ? pair.maxTradesPerDay : 4;
+    document.getElementById('btn-pair-save').disabled = false;
+    document.getElementById('pair-modal').classList.add('open');
+}
+
+function closePairModal() {
+    document.getElementById('pair-modal').classList.remove('open');
+    pairEditSymbol = null;
+}
+
+async function savePair() {
+    const symbol = document.getElementById('pf-symbol').value.trim().toUpperCase();
+    const name = document.getElementById('pf-name').value.trim();
+    if (!symbol || !name) { alert('Symbol and Name are required.'); return; }
+    const payload = {
+        symbol,
+        name,
+        strategyMode: document.getElementById('pf-strategy').value,
+        qty: parseInt(document.getElementById('pf-qty').value, 10) || 1,
+        sessionStart: document.getElementById('pf-session-start').value.trim() || '09:13',
+        sessionEnd: document.getElementById('pf-session-end').value.trim() || '14:00',
+        pointValue: parseFloat(document.getElementById('pf-point-value').value) || 1.0,
+        minTick: parseFloat(document.getElementById('pf-min-tick').value) || 0.25,
+        maxTradesPerDay: parseInt(document.getElementById('pf-max-trades').value, 10) || 4,
+    };
+    const btn = document.getElementById('btn-pair-save');
+    btn.disabled = true;
+    try {
+        if (pairEditSymbol) {
+            await apiFetch('/api/instrument-configs/' + pairEditSymbol, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+        } else {
+            await apiFetch('/api/instrument-configs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+        }
+        closePairModal();
+        await loadPairs();
+    } catch(e) {
+        alert('Save failed: ' + e.message);
+        btn.disabled = false;
+    }
+}
+
+async function togglePair(symbol, newEnabled) {
+    try {
+        await apiFetch('/api/instrument-configs/' + symbol, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: newEnabled }),
+        });
+        await loadPairs();
+    } catch(e) { alert('Toggle failed: ' + e.message); }
+}
+
+async function deletePair(symbol) {
+    if (!confirm(`Remove ${symbol} from live trading? (existing positions will NOT be closed)`)) return;
+    try {
+        await apiFetch('/api/instrument-configs/' + symbol, { method: 'DELETE' });
+        await loadPairs();
+    } catch(e) { alert('Delete failed: ' + e.message); }
+}
+
+document.getElementById('pair-modal').addEventListener('click', function(e) {
+    if (e.target === this) closePairModal();
+});
 
 // ─── Polling orchestration ────────────────────────────────────────────────────
 function getActiveTab() {

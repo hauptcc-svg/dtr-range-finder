@@ -1,4 +1,4 @@
-import { pgTable, serial, text, real, integer, timestamp, date } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, real, integer, timestamp, date, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -42,3 +42,22 @@ export const dailySummaryTable = pgTable("daily_summary", {
 export const insertDailySummarySchema = createInsertSchema(dailySummaryTable).omit({ id: true });
 export type InsertDailySummary = z.infer<typeof insertDailySummarySchema>;
 export type DailySummary = typeof dailySummaryTable.$inferSelect;
+
+export const instrumentConfigsTable = pgTable("instrument_configs", {
+  symbol: text("symbol").primaryKey(),
+  name: text("name").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  qty: integer("qty").notNull().default(1),
+  pointValue: real("point_value").notNull().default(1.0),
+  minTick: real("min_tick").notNull().default(0.25),
+  maxTradesPerDay: integer("max_trades_per_day").notNull().default(4),
+  strategyMode: text("strategy_mode").notNull().default("dtr"), // 'dtr' | 'atr_pullback'
+  sessionStart: text("session_start").notNull().default("09:13"), // HH:MM NY
+  sessionEnd: text("session_end").notNull().default("14:00"), // HH:MM NY
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const insertInstrumentConfigSchema = createInsertSchema(instrumentConfigsTable);
+export type InsertInstrumentConfig = z.infer<typeof insertInstrumentConfigSchema>;
+export type InstrumentConfig = typeof instrumentConfigsTable.$inferSelect;

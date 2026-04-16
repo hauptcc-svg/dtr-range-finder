@@ -340,6 +340,34 @@ def patch_trade_notes(trade_id: int):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# INSTRUMENT CONFIGS  (proxy to TypeScript API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/instrument-configs")
+def get_instrument_configs():
+    body, status = _ts_request("GET", "/instrument-configs")
+    return jsonify(body), status
+
+
+@app.route("/api/instrument-configs", methods=["POST"])
+def create_instrument_config():
+    body, status = _ts_request("POST", "/instrument-configs", data=request.json or {})
+    return jsonify(body), status
+
+
+@app.route("/api/instrument-configs/<symbol>", methods=["PATCH"])
+def patch_instrument_config(symbol: str):
+    body, status = _ts_request("PATCH", f"/instrument-configs/{symbol.upper()}", data=request.json or {})
+    return jsonify(body), status
+
+
+@app.route("/api/instrument-configs/<symbol>", methods=["DELETE"])
+def delete_instrument_config(symbol: str):
+    body, status = _ts_request("DELETE", f"/instrument-configs/{symbol.upper()}")
+    return jsonify(body), status
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CLAUDE TRADE ANALYSIS  (proxy to TypeScript API)
 # ═══════════════════════════════════════════════════════════════════════════
 
