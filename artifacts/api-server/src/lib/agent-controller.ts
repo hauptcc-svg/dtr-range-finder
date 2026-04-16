@@ -673,7 +673,7 @@ class AgentController {
     // Cache account info after successful authentication
     try {
       const info = await this.client!.getAccountInfo();
-      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: true };
+      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: info.canTrade };
       logger.info({ balance: info.balance, accountName: info.name }, "Account info cached");
     } catch (err) {
       logger.warn({ err }, "Could not cache account info on start");
@@ -1282,6 +1282,19 @@ class AgentController {
             .where(eq(tradesTable.id, state.openTradeId));
 
           this.dailyPnl += pnl;
+
+          const instName = TRADING_CONFIG.instruments[symbol]?.name ?? symbol;
+          const closedDir = state.positionDirection;
+          this.sendTelegram(
+            `${pnl >= 0 ? "✅" : "❌"} <b>TRADE CLOSED (FORCED)</b> · DeclanCapital FX\n\n` +
+            `<b>${instName}</b> (${symbol})\n` +
+            `<b>Direction:</b> ${(closedDir ?? "").toUpperCase()}\n` +
+            `<b>Exit:</b> ${lastPrice.toFixed(2)}\n` +
+            `<b>P&amp;L:</b> <b>${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}</b>\n` +
+            `<b>Reason:</b> ${summaryStatus.replace(/_/g, " ").toUpperCase()}\n` +
+            `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+            `<i>${new Date().toUTCString()}</i>`
+          ).catch(() => {});
         }
 
         state.inPosition = false;
