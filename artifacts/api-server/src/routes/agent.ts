@@ -1,5 +1,4 @@
-import { randomBytes } from "crypto";
-import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { agentController } from "../lib/agent-controller";
 import { logger } from "../lib/logger";
 import {
@@ -12,94 +11,9 @@ import {
 import { db, tradesTable, dailySummaryTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { currentNYDate } from "../lib/trading-config";
+import { requireAgentKeyOrSession, issueSession, isValidSession } from "../middlewares/auth";
 
 const router: IRouter = Router();
-
-// ---------------------------------------------------------------------------
-// Session store — maps session tokens to an authenticated flag.
-// Sessions are issued by POST /api/agent/session and are stored in memory.
-// They are ephemeral: they expire on process restart.
-// ---------------------------------------------------------------------------
-const SESSION_COOKIE = "agent_sid";
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
-interface SessionRecord {
-  createdAt: number;
-}
-
-const sessions = new Map<string, SessionRecord>();
-
-function issueSession(res: Response): void {
-  const token = randomBytes(32).toString("hex");
-  sessions.set(token, { createdAt: Date.now() });
-  res.cookie(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "strict",
-    maxAge: SESSION_TTL_MS,
-    // secure: true in production (Replit proxy terminates TLS)
-    secure: process.env.NODE_ENV === "production",
-  });
-}
-
-function isValidSession(req: Request): boolean {
-  const token = req.cookies?.[SESSION_COOKIE] as string | undefined;
-  if (!token) return false;
-  const record = sessions.get(token);
-  if (!record) return false;
-  if (Date.now() - record.createdAt > SESSION_TTL_MS) {
-    sessions.delete(token);
-    return false;
-  }
-  return true;
-}
-
-// Prune expired sessions periodically (every hour)
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, record] of sessions) {
-    if (now - record.createdAt > SESSION_TTL_MS) sessions.delete(token);
-  }
-}, 60 * 60 * 1000);
-
-// ---------------------------------------------------------------------------
-// requireAgentKeyOrSession
-//
-// Mutating endpoints (start/stop) require one of:
-//   1. X-Agent-Key header matching AGENT_CONTROL_SECRET  (external scripts)
-//   2. A valid agent_sid HttpOnly session cookie          (dashboard browser)
-//
-// The session cookie is issued by POST /api/agent/session, which itself
-// requires a correct X-Agent-Key. The cookie is HttpOnly (JS cannot read it),
-// SameSite=Strict (not sent cross-site), and is stored only in server memory.
-// ---------------------------------------------------------------------------
-function requireAgentKeyOrSession(req: Request, res: Response, next: NextFunction): void {
-  const secret = process.env.AGENT_CONTROL_SECRET;
-  if (!secret) {
-    logger.error({ path: req.path }, "AGENT_CONTROL_SECRET is not configured — rejecting");
-    res.status(503).json({ error: "Server misconfiguration: AGENT_CONTROL_SECRET is not set." });
-    return;
-  }
-
-  // Path 1: valid agent key header (external callers / scripts)
-  const providedKey = req.headers["x-agent-key"] as string | undefined;
-  if (providedKey && providedKey === secret) {
-    next();
-    return;
-  }
-
-  // Path 2: valid server-issued session cookie (authenticated dashboard browser)
-  if (isValidSession(req)) {
-    next();
-    return;
-  }
-
-  logger.warn({ ip: req.ip, path: req.path }, "Unauthorized agent control attempt");
-  res.status(401).json({
-    error:
-      "Unauthorized: supply X-Agent-Key header (external scripts) " +
-      "or authenticate via POST /api/agent/session (dashboard).",
-  });
-}
 
 // ---------------------------------------------------------------------------
 // POST /api/agent/session

@@ -3,7 +3,7 @@ import path from "path";
 
 const root = path.resolve(__dirname, "..", "..");
 const apiClientReactSrc = path.resolve(root, "lib", "api-client-react", "src");
-const apiZodSrc = path.resolve(root, "lib", "api-zod", "src");
+const apiZodGenerated = path.resolve(root, "lib", "api-zod", "src", "generated", "api.ts");
 
 // Our exports make assumptions about the title of the API being "Api" (i.e. generated output is `api.ts`).
 const titleTransformer: InputTransformerFn = (config) => {
@@ -48,12 +48,8 @@ export default defineConfig({
       },
     },
     output: {
-      workspace: apiZodSrc,
+      target: apiZodGenerated,
       client: "zod",
-      target: "generated",
-      schemas: { path: "generated/types", type: "typescript" },
-      mode: "split",
-      clean: true,
       prettier: true,
       override: {
         zod: {

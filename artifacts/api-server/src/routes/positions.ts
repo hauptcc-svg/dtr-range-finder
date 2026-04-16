@@ -3,7 +3,8 @@ import { agentController } from "../lib/agent-controller";
 import { GetPositionsResponse } from "@workspace/api-zod";
 import { TRADING_CONFIG } from "../lib/trading-config";
 import { db, tradesTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { requireAgentKeyOrSession } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
@@ -54,7 +55,7 @@ router.get("/positions", async (req, res): Promise<void> => {
   res.json(GetPositionsResponse.parse(positions));
 });
 
-router.post("/positions/:symbol/close", async (req, res): Promise<void> => {
+router.post("/positions/:symbol/close", requireAgentKeyOrSession, async (req, res): Promise<void> => {
   const { symbol } = req.params;
   const result = await agentController.closePositionForSymbol(symbol);
   res.json(result);

@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, tradesTable } from "@workspace/db";
 import { desc, eq, and, sql, count } from "drizzle-orm";
 import { GetTradesQueryParams, GetTradesResponse } from "@workspace/api-zod";
+import { requireAgentKeyOrSession } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
@@ -67,7 +68,7 @@ router.get("/trades", async (req, res): Promise<void> => {
   );
 });
 
-router.patch("/trades/:id/notes", async (req, res): Promise<void> => {
+router.patch("/trades/:id/notes", requireAgentKeyOrSession, async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) {
     res.status(400).json({ success: false, message: "Invalid trade ID" });

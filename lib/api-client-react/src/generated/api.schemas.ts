@@ -33,6 +33,9 @@ export interface AgentStatus {
   authenticatedWithProjectX: boolean;
   /** @nullable */
   errorMessage: string | null;
+  claudeAutonomousMode: boolean;
+  /** @nullable */
+  lastClaudeAutonomousTick: string | null;
 }
 
 export interface InstrumentStatus {

@@ -1,3 +1,4 @@
+import React from "react";
 import { useGetTrades, getGetTradesQueryKey, useUpdateTradeNotes } from "@workspace/api-client-react";
 import type { Trade } from "@workspace/api-client-react";
 import { formatCurrency, formatPrice, formatDate, formatSessionPhase } from "@/lib/format";
@@ -204,57 +205,71 @@ export function Trades() {
                   </TableRow>
                 ) : (
                   data?.trades.map((trade) => (
-                    <TableRow key={trade.id} className="border-border hover:bg-muted/50 transition-colors">
-                      <TableCell className="font-mono text-xs whitespace-nowrap text-muted-foreground">
-                        {formatDate(trade.entryTime)}
-                      </TableCell>
-                      <TableCell className="font-mono font-medium">{trade.instrument}</TableCell>
-                      <TableCell className={cn(
-                        "font-mono text-xs font-bold",
-                        trade.direction === "long" ? "text-success" : "text-destructive"
-                      )}>
-                        {trade.direction.toUpperCase()}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{trade.qty}</TableCell>
-                      <TableCell className="font-mono text-xs text-right">{formatPrice(trade.entryPrice)}</TableCell>
-                      <TableCell className="font-mono text-xs text-right text-muted-foreground">{formatPrice(trade.exitPrice)}</TableCell>
-                      <TableCell className={cn(
-                        "font-mono text-xs font-bold text-right",
-                        (trade.pnl || 0) > 0 ? "text-success" :
-                        (trade.pnl || 0) < 0 ? "text-destructive" : "text-muted-foreground"
-                      )}>
-                        {formatCurrency(trade.pnl)}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{formatSessionPhase(trade.session)}</TableCell>
-                      <TableCell className="font-mono text-xs">
-                        <span className={cn(
-                          "px-2 py-0.5 rounded text-[10px] uppercase font-bold",
-                          trade.status === "open" ? "bg-primary/20 text-primary" :
-                          trade.status === "closed" ? "bg-muted text-muted-foreground" :
-                          "bg-destructive/20 text-destructive"
+                    <React.Fragment key={trade.id}>
+                      <TableRow className="border-border hover:bg-muted/50 transition-colors">
+                        <TableCell className="font-mono text-xs whitespace-nowrap text-muted-foreground">
+                          {formatDate(trade.entryTime)}
+                        </TableCell>
+                        <TableCell className="font-mono font-medium">{trade.instrument}</TableCell>
+                        <TableCell className={cn(
+                          "font-mono text-xs font-bold",
+                          trade.direction === "long" ? "text-success" : "text-destructive"
                         )}>
-                          {trade.status}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setJournalTrade(trade)}
-                          className={cn(
-                            "h-7 w-7 p-0",
-                            trade.notes ? "text-primary" : "text-muted-foreground hover:text-foreground"
-                          )}
-                          title={trade.notes ? "View/edit notes" : "Add journal note"}
-                        >
-                          {trade.notes ? (
-                            <StickyNote className="h-3.5 w-3.5" />
-                          ) : (
-                            <BookOpen className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
+                          {trade.direction.toUpperCase()}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{trade.qty}</TableCell>
+                        <TableCell className="font-mono text-xs text-right">{formatPrice(trade.entryPrice)}</TableCell>
+                        <TableCell className="font-mono text-xs text-right text-muted-foreground">{formatPrice(trade.exitPrice)}</TableCell>
+                        <TableCell className={cn(
+                          "font-mono text-xs font-bold text-right",
+                          (trade.pnl || 0) > 0 ? "text-success" :
+                          (trade.pnl || 0) < 0 ? "text-destructive" : "text-muted-foreground"
+                        )}>
+                          {formatCurrency(trade.pnl)}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{formatSessionPhase(trade.session)}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[10px] uppercase font-bold",
+                            trade.status === "open" ? "bg-primary/20 text-primary" :
+                            trade.status === "closed" ? "bg-muted text-muted-foreground" :
+                            "bg-destructive/20 text-destructive"
+                          )}>
+                            {trade.status}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setJournalTrade(trade)}
+                            className={cn(
+                              "h-7 w-7 p-0",
+                              trade.notes ? "text-primary" : "text-muted-foreground hover:text-foreground"
+                            )}
+                            title={trade.notes ? "View/edit notes" : "Add journal note"}
+                          >
+                            {trade.notes ? (
+                              <StickyNote className="h-3.5 w-3.5" />
+                            ) : (
+                              <BookOpen className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                      {trade.notes && (
+                        <TableRow className="border-border bg-muted/20 hover:bg-muted/30">
+                          <TableCell colSpan={10} className="py-1.5 pl-4 pr-4">
+                            <div className="flex items-start gap-2">
+                              <StickyNote className="h-3 w-3 text-primary/60 mt-0.5 flex-shrink-0" />
+                              <span className="font-mono text-[11px] text-muted-foreground italic line-clamp-2">
+                                {trade.notes}
+                              </span>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </React.Fragment>
                   ))
                 )}
               </TableBody>

@@ -230,6 +230,10 @@ components:
           type: boolean
         errorMessage:
           type: ["string", "null"]
+        claudeAutonomousMode:
+          type: boolean
+        lastClaudeAutonomousTick:
+          type: ["string", "null"]
       required:
         - running
         - sessionPhase
@@ -240,6 +244,8 @@ components:
         - lastUpdated
         - authenticatedWithProjectX
         - errorMessage
+        - claudeAutonomousMode
+        - lastClaudeAutonomousTick
 
     InstrumentStatus:
       type: object
