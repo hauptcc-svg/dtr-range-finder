@@ -94,8 +94,19 @@ Respond with a JSON object in this exact format (no markdown, no explanation out
 }
 
 // ---------------------------------------------------------------------------
-// Autonomous mode — no DTR rules, Claude trades freely with full bar context
+// Autonomous mode — NO DTR rules, no ranges, Claude picks its own strategy
 // ---------------------------------------------------------------------------
+
+/** Compute a simple ATR approximation from bar data (true range average). */
+function computeAtr(bars: BarSnapshot[], period = 14): number {
+  if (bars.length < 2) return 0;
+  const trs = bars.slice(1).map((b, i) => {
+    const prev = bars[i];
+    return Math.max(b.h - b.l, Math.abs(b.h - prev.c), Math.abs(b.l - prev.c));
+  });
+  const slice = trs.slice(-period);
+  return slice.reduce((a, v) => a + v, 0) / slice.length;
+}
 function buildAutonomousPrompt(
   instruments: Array<{
     state: InstrumentState;
@@ -106,75 +117,99 @@ function buildAutonomousPrompt(
   dailyLossLimit: number,
   dailyProfitTarget: number
 ): string {
+  const remainingBudget = dailyLossLimit + dailyPnl;
+
   const instrumentBlocks = instruments
     .map(({ state, config, recentBars }) => {
+      const last30 = recentBars.slice(-30);
+
       const barsText =
-        recentBars.length > 0
-          ? recentBars
-              .slice(-10)
+        last30.length > 0
+          ? last30
               .map(
                 (b) =>
-                  `    ${b.t.slice(11, 16)} O:${b.o} H:${b.h} L:${b.l} C:${b.c} V:${b.v}`
+                  `  ${b.t.slice(11, 16)} O:${b.o} H:${b.h} L:${b.l} C:${b.c} V:${b.v}`
               )
               .join("\n")
-          : "    No recent bars available";
+          : "  (no bar data available)";
+
+      // Derived stats from the bar window
+      const atr = last30.length >= 2 ? computeAtr(last30) : null;
+      const periodHigh = last30.length > 0 ? Math.max(...last30.map((b) => b.h)) : null;
+      const periodLow  = last30.length > 0 ? Math.min(...last30.map((b) => b.l)) : null;
+      const firstClose = last30[0]?.c;
+      const lastClose  = last30[last30.length - 1]?.c;
+      const trendDir =
+        firstClose !== undefined && lastClose !== undefined
+          ? lastClose > firstClose
+            ? "up"
+            : lastClose < firstClose
+            ? "down"
+            : "flat"
+          : "unknown";
 
       const positionText = state.inPosition
-        ? `YES — ${state.positionDirection?.toUpperCase()} ${state.positionQty} contract(s) entered at ${state.positionEntryPrice}`
-        : "No open position";
+        ? `YES — ${state.positionDirection?.toUpperCase()} ${state.positionQty} contract(s) @ entry ${state.positionEntryPrice}`
+        : "None";
+
+      const statsText = [
+        atr !== null ? `ATR(14): ${atr.toFixed(config.minTick < 0.1 ? 3 : 2)}` : null,
+        periodHigh !== null ? `30-bar High: ${periodHigh}` : null,
+        periodLow  !== null ? `30-bar Low:  ${periodLow}` : null,
+        `30-bar Trend: ${trendDir}`,
+      ]
+        .filter(Boolean)
+        .join(" | ");
 
       return [
-        `=== ${state.symbol} (${config.name}) ===`,
-        `Current Price: ${state.lastPrice ?? "unknown"}`,
-        `Position: ${positionText}`,
-        `Trades Today: ${state.todayTrades} / ${config.maxTradesPerDay}`,
-        `Long Losses Today: ${state.longLosses} / ${config.maxLossesPerDirection}`,
-        `Short Losses Today: ${state.shortLosses} / ${config.maxLossesPerDirection}`,
-        `Tick Size: ${config.minTick} | Point Value: $${config.pointValue}/pt`,
-        `Recent 1-min bars (last 10):`,
+        `--- ${state.symbol} (${config.name}) ---`,
+        `Current Price : ${state.lastPrice ?? "unknown"}`,
+        `Open Position : ${positionText}`,
+        `Trades Today  : ${state.todayTrades} / ${config.maxTradesPerDay}`,
+        `Tick / Point  : ${config.minTick} tick | $${config.pointValue}/pt`,
+        `Stats         : ${statsText}`,
+        `Recent 1-min bars (oldest → newest):`,
         barsText,
       ].join("\n");
     })
     .join("\n\n");
 
-  return `You are an expert futures day trader with full discretion to trade these micro futures contracts.
-You are NOT constrained by any specific strategy — use your own analysis of price action, momentum, and market structure.
+  return `You are an autonomous futures trader with complete discretion. You choose your own strategy based purely on current market conditions — momentum, trend-following, breakout, mean-reversion, volume analysis, or any other approach you judge appropriate right now. There are no rules about ranges, sessions, or biases. Just read the market and act.
 
-ACCOUNT STATUS:
-  Daily P&L: $${dailyPnl.toFixed(2)}
-  Daily Loss Limit: -$${dailyLossLimit} (HARD STOP — do not exceed)
-  Daily Profit Target: +$${dailyProfitTarget}
-  Remaining loss budget: $${(dailyLossLimit + dailyPnl).toFixed(2)}
+ACCOUNT:
+  Daily P&L       : $${dailyPnl.toFixed(2)}
+  Loss Limit      : -$${dailyLossLimit}  (hard floor — never breach)
+  Profit Target   : +$${dailyProfitTarget}
+  Remaining Budget: $${remainingBudget.toFixed(2)}
 
-INSTRUMENTS:
+INSTRUMENTS (1-minute bars, last 30 candles):
 ${instrumentBlocks}
 
-YOUR TASK:
-For each instrument, decide one of:
-- "long"  — open a new long position now (only if NOT already in a position)
-- "short" — open a new short position now (only if NOT already in a position)
-- "close" — close the existing position now (only if IN a position)
-- "skip"  — do nothing
+INSTRUCTIONS:
+For each instrument output exactly one of:
+  "long"  — enter a long now  (only when NOT in a position)
+  "short" — enter a short now (only when NOT in a position)
+  "close" — exit the open position now (only when IN a position)
+  "skip"  — do nothing
 
-Consider:
-- Momentum and direction from recent bars
-- Support/resistance levels visible in the bar data
-- Risk/reward given current daily P&L
-- Don't open new positions if daily loss limit is nearly hit (remaining < $50)
-- Don't open new positions if daily profit target is already exceeded
-- Only recommend "close" for instruments that have an open position
-- Only recommend "long"/"short" for instruments with NO open position
+Rules you must obey:
+1. Never go long and short the same instrument simultaneously.
+2. Never open a new trade if remaining budget < $50.
+3. Never open a new trade if today's trade count is at the max.
+4. Only output "close" for instruments that have an open position.
+5. Only output "long"/"short" for instruments with no open position.
+6. Explain your market logic in the "reasoning" field (2-3 sentences, name the specific pattern/setup you see).
 
-Respond with ONLY a JSON object, no markdown, no preamble:
+Respond with ONLY this JSON — no markdown, no extra text:
 {
   "decisions": [
     {
       "symbol": "SYMBOL",
       "action": "long" | "short" | "close" | "skip",
-      "reasoning": "1-2 sentence explanation of your analysis"
+      "reasoning": "your market analysis and the specific setup you identified"
     }
   ],
-  "summary": "one sentence overall market read"
+  "summary": "one sentence describing your overall read of current market conditions"
 }`;
 }
 

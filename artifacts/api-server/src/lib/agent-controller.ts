@@ -247,13 +247,17 @@ class AgentController {
             instrument: decision.symbol,
             direction: decision.action,
             entryPrice: price,
+            exitPrice: null,
             qty: config.qty,
+            pnl: null,
             stopPrice,
             tp1Price,
-            session: "claude_auto",
+            tp2Price: null,
+            session: "ny",
             status: "open",
-            orderId: orderResult.orderId,
+            projectxOrderId: orderResult.orderId,
             entryTime: new Date(),
+            exitTime: null,
           })
           .returning();
 
@@ -298,6 +302,140 @@ class AgentController {
       return { success: false, advice: null, tradesPlaced: [], message: "No enabled instruments available." };
     }
 
+    // -------------------------------------------------------------------------
+    // AUTONOMOUS MODE: fetch bars + use Claude's own strategy (no DTR context)
+    // -------------------------------------------------------------------------
+    if (this.claudeAutonomousMode) {
+      const windowEnd = new Date();
+      const windowStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);
+
+      const withBars = await Promise.all(
+        eligibleInstruments.map(async ({ state, config }) => {
+          let recentBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
+          if (state.contractId && this.client) {
+            try {
+              const bars = await this.client.getBars(state.contractId, windowStart, windowEnd);
+              recentBars = bars.map((b) => ({
+                t: new Date(b.t).toISOString(),
+                o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
+              }));
+              if (recentBars.length > 0) state.lastPrice = recentBars[recentBars.length - 1].c;
+            } catch {
+              // non-fatal
+            }
+          }
+          return { state, config, recentBars };
+        })
+      );
+
+      let advice: ClaudeAdvice;
+      try {
+        advice = await getClaudeAutonomousAdvice(
+          withBars,
+          this.dailyPnl,
+          TRADING_CONFIG.dailyLossLimit,
+          TRADING_CONFIG.dailyProfitTarget
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error({ err }, "Claude autonomous advisor error");
+        return { success: false, advice: null, tradesPlaced: [], message: `Claude analysis failed: ${msg}` };
+      }
+
+      logger.info({ summary: advice.summary, decisions: advice.decisions }, "Claude autonomous advice (manual trigger)");
+
+      const tradesPlaced: string[] = [];
+
+      for (const decision of advice.decisions) {
+        const state = this.instrumentStates.get(decision.symbol);
+        const config = TRADING_CONFIG.instruments[decision.symbol];
+        if (!state || !config || !state.contractId) continue;
+
+        if (decision.action === "close") {
+          if (!state.inPosition) continue;
+          try {
+            await this.client!.closePositionForContract(state.contractId);
+            tradesPlaced.push(`${decision.symbol} CLOSED`);
+          } catch (err) {
+            logger.error({ err, symbol: decision.symbol }, "Failed to close position (autonomous manual)");
+          }
+          continue;
+        }
+
+        if (decision.action === "skip") continue;
+        if (state.inPosition) continue;
+        if (state.todayTrades >= config.maxTradesPerDay) continue;
+        if (this.dailyPnl <= -TRADING_CONFIG.dailyLossLimit) continue;
+
+        const isBuy = decision.action === "long";
+        const price = state.lastPrice;
+        if (!price) continue;
+
+        const stopDist = price * 0.005;
+        const stopPrice = isBuy ? price - stopDist : price + stopDist;
+        const tp1Price  = isBuy ? price + stopDist * 2 : price - stopDist * 2;
+
+        try {
+          const orderResult = await this.client!.placeBracketOrder({
+            contractId: state.contractId,
+            isBuy,
+            qty: config.qty,
+            stopPrice,
+            tp1Price,
+          });
+
+          const [trade] = await db
+            .insert(tradesTable)
+            .values({
+              instrument: decision.symbol,
+              direction: decision.action,
+              entryPrice: price,
+              exitPrice: null,
+              qty: config.qty,
+              pnl: null,
+              stopPrice,
+              tp1Price,
+              tp2Price: null,
+              session: "ny",
+              status: "open",
+              projectxOrderId: orderResult.orderId,
+              entryTime: new Date(),
+              exitTime: null,
+            })
+            .returning();
+
+          state.inPosition = true;
+          state.positionDirection = decision.action;
+          state.positionQty = config.qty;
+          state.positionEntryPrice = price;
+          state.positionOpenedAt = new Date().toISOString();
+          state.openTradeId = trade.id;
+          state.todayTrades++;
+          this.tradeCount++;
+
+          tradesPlaced.push(`${decision.symbol} ${decision.action.toUpperCase()}`);
+          logger.info({ symbol: decision.symbol, action: decision.action }, "Claude autonomous manual trade placed");
+        } catch (err) {
+          logger.error({ err, symbol: decision.symbol }, "Error placing autonomous manual trade");
+        }
+      }
+
+      await this.updateDailySummary();
+
+      return {
+        success: true,
+        advice,
+        tradesPlaced,
+        message: tradesPlaced.length > 0
+          ? `Placed ${tradesPlaced.length} trade(s): ${tradesPlaced.join(", ")}`
+          : "Claude analysed the market but recommended no trades at this time.",
+      };
+    }
+
+    // -------------------------------------------------------------------------
+    // DTR RULES MODE: use range data for stops/targets
+    // -------------------------------------------------------------------------
+
     // Update last prices before sending to Claude
     for (const { state } of eligibleInstruments) {
       if (state.contractId) {
@@ -319,7 +457,7 @@ class AgentController {
       return { success: false, advice: null, tradesPlaced: [], message: `Claude analysis failed: ${msg}` };
     }
 
-    logger.info({ summary: advice.summary, decisions: advice.decisions }, "Claude advice received");
+    logger.info({ summary: advice.summary, decisions: advice.decisions }, "Claude DTR advice received");
 
     const tradesPlaced: string[] = [];
 
@@ -399,9 +537,9 @@ class AgentController {
         this.tradeCount++;
 
         tradesPlaced.push(`${decision.symbol} ${decision.action.toUpperCase()}`);
-        logger.info({ symbol: decision.symbol, action: decision.action }, "Claude-initiated trade placed");
+        logger.info({ symbol: decision.symbol, action: decision.action }, "Claude DTR trade placed");
       } catch (err) {
-        logger.error({ err, symbol: decision.symbol }, "Error placing Claude-initiated trade");
+        logger.error({ err, symbol: decision.symbol }, "Error placing Claude DTR trade");
       }
     }
 
