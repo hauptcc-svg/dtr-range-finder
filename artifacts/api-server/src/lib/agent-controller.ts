@@ -19,6 +19,7 @@ import {
   type InstrumentState,
 } from "./dtr-strategy";
 import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, type ClaudeAdvice } from "./claude-advisor";
+import { checkAtrPullbackSignal, DEFAULT_ATR_PULLBACK_PARAMS } from "./atr-pullback-strategy";
 import { db, tradesTable, dailySummaryTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 
@@ -89,6 +90,8 @@ class AgentController {
   private readonly CLAUDE_AUTONOMOUS_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   // Cached account info (updated on start and on demand)
   private cachedAccountInfo: { balance: number; accountId: number; accountName: string; canTrade: boolean } | null = null;
+  // Deduplication: tracks the timestamp of the last bar that fired an ATR pullback signal per instrument
+  private lastAtrSignalBarTs: Map<string, number> = new Map();
 
   constructor() {
     // Initialize instrument states
@@ -1124,6 +1127,112 @@ class AgentController {
         // Nothing to do outside trading hours
         break;
     }
+
+    // ATR Pullback strategy runs independently for US30 + Nas100 (09:30–15:30 NY)
+    await this.processAtrPullbackSignals();
+  }
+
+  /**
+   * CCHOAS21 ATR Volume Pullback — runs for MYMM6 (US30) and MNQM6 (Nas100) only.
+   * Session window: 09:30–15:30 NY. Independent of DTR phase state machine.
+   */
+  private async processAtrPullbackSignals(): Promise<void> {
+    if (!this.client) return;
+
+    // Only active during 09:30–15:30 NY
+    if (!isInTimeWindow("09:30", "15:30")) return;
+
+    for (const [symbol, state] of this.instrumentStates) {
+      const config = TRADING_CONFIG.instruments[symbol];
+      if (config?.strategyMode !== "atr_pullback") continue;
+      if (!this.isInstrumentEnabled(symbol)) continue;
+      if (!state.contractId) continue;
+      if (state.inPosition) continue;
+
+      try {
+        // Fetch last 8 hours of 1-min bars (covers EMA200 warm-up)
+        const now = new Date();
+        const startTime = new Date(now.getTime() - 8 * 60 * 60 * 1000);
+        const bars = await this.client.getBars(state.contractId, startTime, now);
+
+        if (bars.length === 0) continue;
+
+        // Update last price from the most recent bar
+        const lastBar = bars[bars.length - 1];
+        state.lastPrice = lastBar.c;
+
+        // Deduplicate: don't fire twice on the same 1-minute bar
+        const lastBarTs = lastBar.t;
+        if (this.lastAtrSignalBarTs.get(symbol) === lastBarTs) continue;
+
+        const signal = checkAtrPullbackSignal(bars, state.todayTrades, DEFAULT_ATR_PULLBACK_PARAMS);
+        if (!signal) continue;
+
+        // Mark this bar as fired
+        this.lastAtrSignalBarTs.set(symbol, lastBarTs);
+
+        logger.info({ symbol, signal }, "ATR Pullback signal detected, placing order");
+
+        const orderResult = await this.client.placeBracketOrder({
+          contractId: state.contractId,
+          isBuy: signal.direction === "long",
+          qty: config.qty,
+          stopPrice: signal.stopPrice,
+          tp1Price: signal.tp1Price,
+        });
+
+        // Record in DB
+        const [trade] = await db
+          .insert(tradesTable)
+          .values({
+            instrument: symbol,
+            direction: signal.direction,
+            entryPrice: signal.entryPrice,
+            exitPrice: null,
+            qty: config.qty,
+            pnl: null,
+            session: "ny",
+            status: "open",
+            entryTime: new Date(),
+            exitTime: null,
+            stopPrice: signal.stopPrice,
+            tp1Price: signal.tp1Price,
+            tp2Price: null,
+            projectxOrderId: orderResult.orderId,
+            strategy: "dtr", // tagged "dtr" because this is a rule-based strategy (not Claude)
+          })
+          .returning();
+
+        state.inPosition = true;
+        state.positionDirection = signal.direction;
+        state.positionQty = config.qty;
+        state.positionEntryPrice = signal.entryPrice;
+        state.positionOpenedAt = new Date().toISOString();
+        state.openTradeId = trade.id;
+        state.todayTrades++;
+
+        this.tradeCount++;
+        await this.updateDailySummary();
+
+        this.sendTelegram(
+          `📈 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
+          `<b>${config.name ?? symbol}</b> (${symbol})\n` +
+          `<b>Strategy:</b> ATR Volume Pullback (CCHOAS21)\n` +
+          `<b>Direction:</b> ${signal.direction.toUpperCase()}\n` +
+          `<b>Qty:</b> ${config.qty}\n` +
+          `<b>Entry:</b> ${signal.entryPrice.toFixed(2)}\n` +
+          `<b>Stop:</b> ${signal.stopPrice.toFixed(2)}\n` +
+          `<b>TP:</b> ${signal.tp1Price.toFixed(2)}\n` +
+          `<b>ATR:</b> ${signal.atr.toFixed(2)}\n` +
+          `<b>Session:</b> NY\n` +
+          `<b>Mode:</b> ATR Pullback Rules\n` +
+          `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+          `<i>${new Date().toUTCString()}</i>`
+        ).catch(() => {});
+      } catch (err) {
+        logger.error({ err, symbol }, "Error processing ATR pullback signal");
+      }
+    }
   }
 
   private async processRangePhase(session: "london" | "ny"): Promise<void> {
@@ -1134,6 +1243,8 @@ class AgentController {
     for (const [symbol, state] of this.instrumentStates) {
       if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
+      // ATR pullback instruments don't use the DTR range phase
+      if (TRADING_CONFIG.instruments[symbol]?.strategyMode === "atr_pullback") continue;
 
       try {
         // Convert NY wall-clock session boundaries to UTC (DST-safe)
@@ -1167,6 +1278,8 @@ class AgentController {
       const config = TRADING_CONFIG.instruments[symbol];
       if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
+      // ATR pullback instruments are handled by processAtrPullbackSignals, not DTR entry phase
+      if (config?.strategyMode === "atr_pullback") continue;
       if (!state.rangeData) continue;
       if (state.inPosition) continue;
 

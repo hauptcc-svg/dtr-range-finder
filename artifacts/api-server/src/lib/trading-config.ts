@@ -24,6 +24,8 @@ export interface InstrumentConfig {
   maxLossesPerDirection: number;
   pointValue: number;
   minTick: number;
+  /** Which signal engine drives this instrument */
+  strategyMode: "dtr" | "atr_pullback";
 }
 
 export interface TradingConfig {
@@ -62,6 +64,7 @@ export const TRADING_CONFIG: TradingConfig = {
       maxLossesPerDirection: 2,
       pointValue: 0.5,
       minTick: 1,
+      strategyMode: "atr_pullback",
     },
     MCLK6: {
       symbol: "MCLK6",
@@ -84,6 +87,7 @@ export const TRADING_CONFIG: TradingConfig = {
       maxLossesPerDirection: 2,
       pointValue: 1.0,
       minTick: 0.01,
+      strategyMode: "dtr",
     },
     MGCM6: {
       symbol: "MGCM6",
@@ -106,6 +110,7 @@ export const TRADING_CONFIG: TradingConfig = {
       maxLossesPerDirection: 2,
       pointValue: 1.0,
       minTick: 0.1,
+      strategyMode: "dtr",
     },
     MNQM6: {
       symbol: "MNQM6",
@@ -128,6 +133,7 @@ export const TRADING_CONFIG: TradingConfig = {
       maxLossesPerDirection: 2,
       pointValue: 0.5,
       minTick: 0.25,
+      strategyMode: "atr_pullback",
     },
   },
 };
