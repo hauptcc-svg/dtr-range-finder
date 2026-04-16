@@ -1051,6 +1051,7 @@
 <div class="modal-overlay" id="account-modal">
     <div class="pair-modal">
         <div class="pair-modal-title">Add Account</div>
+        <div id="acct-modal-feedback" style="min-height:16px;font-size:11px;margin-bottom:10px"></div>
         <div class="pair-form-grid">
             <div class="pair-field">
                 <label>Account ID (numeric) *</label>
@@ -2016,6 +2017,7 @@ function openAccountModal() {
     document.getElementById('af-id').value = '';
     document.getElementById('af-number').value = '';
     document.getElementById('af-label').value = '';
+    document.getElementById('acct-modal-feedback').textContent = '';
     document.getElementById('account-modal').classList.add('open');
 }
 
@@ -2023,16 +2025,23 @@ function closeAccountModal() {
     document.getElementById('account-modal').classList.remove('open');
 }
 
+function setModalFeedback(msg, isErr) {
+    const el = document.getElementById('acct-modal-feedback');
+    el.textContent = msg;
+    el.style.color = isErr ? '#ef4444' : '#10b981';
+}
+
 async function saveAccount() {
     const accountId = parseInt(document.getElementById('af-id').value, 10);
     const accountNumber = document.getElementById('af-number').value.trim();
     const label = document.getElementById('af-label').value.trim();
     if (!accountId || isNaN(accountId) || !accountNumber) {
-        setAcctFeedback('Account ID and Account Number are required.', true);
+        setModalFeedback('Account ID and Account Number are required.', true);
         return;
     }
     const btn = document.getElementById('btn-acct-save');
     btn.disabled = true;
+    setModalFeedback('Saving…', false);
     try {
         await apiFetch('/api/account-configs', {
             method: 'POST',
@@ -2043,7 +2052,7 @@ async function saveAccount() {
         setAcctFeedback('Account registered.', false);
         await loadAccounts();
     } catch(e) {
-        setAcctFeedback('Save failed: ' + e.message, true);
+        setModalFeedback('Error: ' + e.message, true);
     } finally {
         btn.disabled = false;
     }

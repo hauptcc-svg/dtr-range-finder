@@ -13,7 +13,7 @@ import os
 import logging
 from datetime import datetime
 import requests
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, make_response
 
 logging.basicConfig(
     level=logging.INFO,
@@ -181,7 +181,11 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
 
 @app.route("/")
 def dashboard():
-    return render_template("dashboard_autonomous.html", base_path=BASE_PATH)
+    resp = make_response(render_template("dashboard_autonomous.html", base_path=BASE_PATH))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 # ═══════════════════════════════════════════════════════════════════════════
