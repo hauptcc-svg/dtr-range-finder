@@ -1,0 +1,215 @@
+//@version=5
+strategy(
+     title               = "CCHOAS21! - ATR Volume Pullback",
+     shorttitle          = "CCHOAS21 - ATR Volume Pullback",
+     overlay             = true,
+     default_qty_type    = strategy.percent_of_equity,
+     default_qty_value   = 175,
+     commission_type     = strategy.commission.percent,
+     commission_value    = 0.01,
+     slippage            = 2,
+     max_bars_back       = 500,
+     initial_capital     = 1000000,
+     calc_on_order_fills = false,
+     process_orders_on_close = false
+     )
+
+// ═══════════════════════════════════════════════════════
+// DESIGN: v16 trailing stop base with correct position sizing
+//
+// Position sizing rationale (NQ futures):
+//   - NQ contract = $20/pt × ~20,000 pts = $400,000/contract
+//   - 175% of $1M equity = $1.75M position value = 4.375 contracts
+//   - 1×ATR stop = 40pts × $20 × 4.375 = $3,500 risk = 0.35% of equity ✓
+//   - Commission: 0.01% × $1.75M × 2 = $350/trade = 0.035% of equity/trade
+//
+// PnL projection at v16 metrics (WR=82.82%, PF=2.14, 163 trades):
+//   - EV per trade: 82.82%×0.11% - 17.18%×0.25% = +0.048% of position
+//   - Less commission: -0.02% → net +0.028% per trade
+//   - 163 × 0.028% × 175% = 7.99% ... target: loosen for 200+ trades
+//   - 200 × 0.028% × 175% = 9.8% ≈ 10% ✓
+//   - Max DD: ~1.75% ✓ (scales from v16's 0.005% × 350)
+// ═══════════════════════════════════════════════════════
+
+// INPUTS
+ema_fast_p = input.int(20,  "Fast EMA",         minval=5)
+ema_slow_p = input.int(50,  "Slow EMA",         minval=10)
+ema_200_p  = input.int(200, "200 EMA Macro",    minval=50)
+use_200    = input.bool(true, "200 EMA Filter")
+
+atr_len    = input.int(14,   "ATR Length",      minval=1)
+atr_sl     = input.float(1.0,"SL x ATR",        minval=0.3, step=0.05)
+atr_tp     = input.float(0.75,"TP x ATR",       minval=0.2, step=0.05)
+atr_be     = input.float(0.3,"Trail Activate ATRx",  minval=0.1, step=0.05)
+atr_trail  = input.float(0.25,"Trail Offset ATRx",   minval=0.05, step=0.05)
+
+rsi_len    = input.int(14,   "RSI Length",      minval=2)
+rsi_lo_l   = input.int(35,   "RSI Long Min",    minval=20, maxval=60)
+rsi_hi_l   = input.int(72,   "RSI Long Max",    minval=40, maxval=85)
+rsi_lo_s   = input.int(28,   "RSI Short Min",   minval=10, maxval=55)
+rsi_hi_s   = input.int(65,   "RSI Short Max",   minval=30, maxval=75)
+
+vol_mult   = input.float(0.8,"Volume x avg",    minval=0.3, step=0.1)
+zone_m     = input.float(0.5,"EMA Zone ATRx",   minval=0.1, step=0.1)
+adx_min    = input.int(15,   "Min ADX",         minval=10, maxval=40)
+
+sess_str   = input.session("0930-1530","Trade Window ET")
+max_trades = input.int(5,   "Max Daily Trades",  minval=1)
+show_emas  = input.bool(true,"Show EMAs")
+
+// ═══════════════════════════════════════════════════════
+// INDICATORS
+// ═══════════════════════════════════════════════════════
+ema_f   = ta.ema(close, ema_fast_p)
+ema_s   = ta.ema(close, ema_slow_p)
+ema_200 = ta.ema(close, ema_200_p)
+atr     = ta.atr(atr_len)
+rsi     = ta.rsi(close, rsi_len)
+vol_avg = ta.sma(volume, 20)
+[_dip, _dim, adx_v] = ta.dmi(14, 14)
+
+in_sess = not na(time(timeframe.period, sess_str, "America/New_York"))
+
+// ═══════════════════════════════════════════════════════
+// DAILY TRADE COUNTER
+// ═══════════════════════════════════════════════════════
+var int daily_count  = 0
+var int last_day_key = -1
+day_key    = year * 10000 + month * 100 + dayofmonth
+is_new_day = day_key != last_day_key
+if is_new_day
+    daily_count  := 0
+    last_day_key := day_key
+
+// ═══════════════════════════════════════════════════════
+// TREND & FILTERS
+// ═══════════════════════════════════════════════════════
+uptrend   = ema_f > ema_s and close > ema_s
+downtrend = ema_f < ema_s and close < ema_s
+macro_l   = not use_200 or close > ema_200
+macro_s   = not use_200 or close < ema_200
+trending  = adx_v >= adx_min
+
+// ═══════════════════════════════════════════════════════
+// PULLBACK SIGNALS (v11 base)
+// ═══════════════════════════════════════════════════════
+zone = zone_m * atr
+
+pb_long    = low[1]  <= ema_f[1] + zone
+rev_long   = close > ema_f and close > open
+
+pb_short   = high[1] >= ema_f[1] - zone
+rev_short  = close < ema_f and close < open
+
+hi_vol     = volume >= vol_mult * vol_avg
+rsi_ok_l   = rsi >= rsi_lo_l and rsi <= rsi_hi_l
+rsi_ok_s   = rsi >= rsi_lo_s and rsi <= rsi_hi_s
+
+// ═══════════════════════════════════════════════════════
+// ENTRY
+// ═══════════════════════════════════════════════════════
+flat = strategy.position_size == 0
+
+long_sig = flat and in_sess and daily_count < max_trades
+         and uptrend and macro_l and trending
+         and pb_long and rev_long
+         and hi_vol and rsi_ok_l
+
+short_sig = flat and in_sess and daily_count < max_trades
+          and downtrend and macro_s and trending
+          and pb_short and rev_short
+          and hi_vol and rsi_ok_s
+
+// ═══════════════════════════════════════════════════════
+// ORDERS — Trail Stop + TP
+// trail activates at atr_be×ATR gain, trails by atr_trail×ATR
+// TP fires if price reaches atr_tp×ATR (whichever comes first)
+// ═══════════════════════════════════════════════════════
+if long_sig
+    long_sl   = close - atr_sl * atr
+    long_tp   = close + atr_tp * atr
+    trail_act = close + atr_be   * atr
+    trail_off = atr_trail * atr
+    strategy.entry("L", strategy.long)
+    alert('{"contract":"NAS100","side":"buy","size":1,"order_type":"market","stop_loss":' + str.tostring(long_sl, "#.00") + ',"take_profit":' + str.tostring(long_tp, "#.00") + '}', alert.freq_once_per_bar)
+    strategy.exit("L-x", "L",
+         stop         = long_sl,
+         limit        = long_tp,
+         trail_price  = trail_act,
+         trail_offset = trail_off)
+    daily_count := daily_count + 1
+
+if short_sig
+    short_sl    = close + atr_sl * atr
+    short_tp    = close - atr_tp * atr
+    trail_act_s = close - atr_be   * atr
+    trail_off_s = atr_trail * atr
+    strategy.entry("S", strategy.short)
+    alert('{"contract":"NAS100","side":"sell","size":1,"order_type":"market","stop_loss":' + str.tostring(short_sl, "#.00") + ',"take_profit":' + str.tostring(short_tp, "#.00") + '}', alert.freq_once_per_bar)
+    strategy.exit("S-x", "S",
+         stop         = short_sl,
+         limit        = short_tp,
+         trail_price  = trail_act_s,
+         trail_offset = trail_off_s)
+    daily_count := daily_count + 1
+
+// ═══════════════════════════════════════════════════════
+// CLOSE ALERT — fires when position goes flat for any reason
+// (SL hit, TP hit, or trailing stop triggered)
+// ═══════════════════════════════════════════════════════
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    alert('{"contract":"NAS100","side":"close","size":1,"order_type":"market"}', alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════
+// VISUALIZATION
+// ═══════════════════════════════════════════════════════
+plot(show_emas ? ema_f   : na, "EMA 20",  color=color.new(color.blue,   0), linewidth=2)
+plot(show_emas ? ema_s   : na, "EMA 50",  color=color.new(color.orange, 0), linewidth=2)
+plot(show_emas ? ema_200 : na, "EMA 200", color=color.new(color.purple, 0), linewidth=1)
+
+plotshape(long_sig,  "Long",  shape.triangleup,   location.belowbar, color.lime, size=size.small)
+plotshape(short_sig, "Short", shape.triangledown, location.abovebar, color.red,  size=size.small)
+bgcolor(in_sess ? color.new(color.gray, 95) : na)
+
+// ═══════════════════════════════════════════════════════
+// PERFORMANCE TABLE
+// ═══════════════════════════════════════════════════════
+var table t = table.new(position.top_right, 2, 7,
+     bgcolor=color.new(color.black, 70), border_width=1,
+     border_color=color.new(color.gray, 50))
+
+if barstate.islast
+    wins  = strategy.wintrades
+    total = strategy.closedtrades
+    wr    = total > 0 ? wins / total * 100 : 0.0
+    pf    = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : 0.0
+    pnl   = strategy.netprofit / strategy.initial_capital * 100
+    dd    = strategy.max_drawdown / strategy.initial_capital * 100
+    tpd   = total > 0 ? total / 105.0 : 0.0
+
+    ok  = color.new(color.lime, 10)
+    bad = color.new(color.red,  10)
+    hdr = color.new(color.gray, 40)
+    wt  = color.white
+    sz  = size.small
+
+    table.cell(t, 0, 0, "CCHOAS21! - Claude", text_color=wt, bgcolor=hdr, text_size=sz)
+    table.cell(t, 1, 0, "Target",             text_color=wt, bgcolor=hdr, text_size=sz)
+    table.cell(t, 0, 1, "Net PnL %",          text_color=wt, text_size=sz)
+    table.cell(t, 1, 1, str.tostring(pnl, "#.##") + "%",
+               text_color=pnl >= 10 ? ok : bad, text_size=sz)
+    table.cell(t, 0, 2, "Win Rate",           text_color=wt, text_size=sz)
+    table.cell(t, 1, 2, str.tostring(wr, "#.#") + "%",
+               text_color=wr >= 65 ? ok : bad, text_size=sz)
+    table.cell(t, 0, 3, "Profit Factor",      text_color=wt, text_size=sz)
+    table.cell(t, 1, 3, str.tostring(pf, "#.##"),
+               text_color=pf >= 1.75 and pf <= 2.25 ? ok : bad, text_size=sz)
+    table.cell(t, 0, 4, "Total Trades",       text_color=wt, text_size=sz)
+    table.cell(t, 1, 4, str.tostring(total),
+               text_color=total >= 100 ? ok : bad, text_size=sz)
+    table.cell(t, 0, 5, "Max DD %",           text_color=wt, text_size=sz)
+    table.cell(t, 1, 5, str.tostring(dd, "#.##") + "%",
+               text_color=dd < 2 ? ok : bad, text_size=sz)
+    table.cell(t, 0, 6, "Trades/Day",         text_color=wt, text_size=sz)
+    table.cell(t, 1, 6, str.tostring(tpd, "#.##"),
+               text_color=tpd >= 2 and tpd <= 4 ? ok : bad, text_size=sz)

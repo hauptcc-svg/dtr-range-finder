@@ -299,6 +299,7 @@ class AgentController {
             projectxOrderId: orderResult.orderId,
             entryTime: new Date(),
             exitTime: null,
+            strategy: "claude",
           })
           .returning();
 
@@ -457,6 +458,7 @@ class AgentController {
               projectxOrderId: orderResult.orderId,
               entryTime: new Date(),
               exitTime: null,
+              strategy: "claude",
             })
             .returning();
 
@@ -594,6 +596,7 @@ class AgentController {
             tp1Price,
             tp2Price,
             projectxOrderId: orderResult.orderId,
+            strategy: this.claudeAutonomousMode ? "claude" : "dtr",
           })
           .returning();
 
@@ -1205,6 +1208,7 @@ class AgentController {
             tp1Price: signal.tp1Price,
             tp2Price: signal.tp2Price,
             projectxOrderId: orderResult.orderId,
+            strategy: "dtr",
           })
           .returning();
 

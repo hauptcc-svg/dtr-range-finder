@@ -110,6 +110,7 @@ export const GetTradesResponse = zod.object({
       tp1Price: zod.number().nullable(),
       tp2Price: zod.number().nullable(),
       notes: zod.string().nullable(),
+      strategy: zod.string().nullable(),
     }),
   ),
   total: zod.number(),

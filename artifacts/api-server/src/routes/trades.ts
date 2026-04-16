@@ -76,6 +76,7 @@ router.get("/trades", async (req, res): Promise<void> => {
     tp1Price: t.tp1Price ?? null,
     tp2Price: t.tp2Price ?? null,
     notes: t.notes ?? null,
+    strategy: t.strategy ?? null,
   }));
 
   res.json(

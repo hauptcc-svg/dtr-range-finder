@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DTR Autonomous Trading</title>
+    <title>DeclanCapital FX</title>
+    <link rel="icon" type="image/svg+xml" href="{{ base_path }}/static/favicon.svg">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -376,6 +377,53 @@
         .btn-save-notes:disabled { opacity: 0.5; cursor: not-allowed; }
         .saved-badge { color: #10b981; font-size: 12px; margin-right: auto; }
 
+        /* ── Strategy badges ── */
+        .badge-strategy-dtr {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            background: rgba(16,185,129,0.15);
+            color: #10b981;
+            border: 1px solid rgba(16,185,129,0.3);
+        }
+        .badge-strategy-claude {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            background: rgba(14,165,233,0.15);
+            color: #0ea5e9;
+            border: 1px solid rgba(14,165,233,0.3);
+        }
+
+        /* ── Export buttons ── */
+        .btn-export {
+            padding: 5px 12px;
+            border-radius: 5px;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: all 0.2s;
+        }
+        .btn-export-csv {
+            background: rgba(16,185,129,0.1);
+            border: 1px solid rgba(16,185,129,0.35);
+            color: #10b981;
+        }
+        .btn-export-csv:hover { background: rgba(16,185,129,0.2); }
+        .btn-export-xlsx {
+            background: rgba(59,130,246,0.1);
+            border: 1px solid rgba(59,130,246,0.35);
+            color: #3b82f6;
+        }
+        .btn-export-xlsx:hover { background: rgba(59,130,246,0.2); }
+
         /* ── Notes sub-row ── */
         .notes-preview-row td {
             background: rgba(14,165,233,0.04);
@@ -432,8 +480,8 @@
 
 <!-- ═══════ Header ═══════ -->
 <div class="header">
-    <span style="font-size:22px">⚡</span>
-    <h1>DTR TRADING AGENT</h1>
+    <span style="font-size:22px">🐺</span>
+    <h1>DECLANCAPITAL FX</h1>
     <a href="https://topstep-bot-hauptcc.replit.app/" target="_blank" rel="noopener" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(0,255,136,0.08);border:1px solid rgba(0,255,136,0.25);border-radius:6px;color:#00ff88;font-size:11px;font-family:'Courier New',monospace;font-weight:bold;text-decoration:none;text-transform:uppercase;letter-spacing:1px;transition:background 0.2s" onmouseover="this.style.background='rgba(0,255,136,0.15)'" onmouseout="this.style.background='rgba(0,255,136,0.08)'">🔗 TopStep Live</a>
 </div>
 
@@ -607,7 +655,13 @@
     </div>
 
     <div class="card">
-        <div class="card-title" style="margin-bottom:14px">📜 Trade History</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div class="card-title" style="margin-bottom:0">📜 Trade History</div>
+            <div style="display:flex;gap:8px">
+                <button class="btn-export btn-export-csv" onclick="exportTrades('csv')">⬇ CSV</button>
+                <button class="btn-export btn-export-xlsx" onclick="exportTrades('xlsx')">⬇ XLSX</button>
+            </div>
+        </div>
         <div class="table-wrap">
             <table>
                 <thead>
@@ -620,12 +674,13 @@
                         <th class="td-right">Exit</th>
                         <th class="td-right">P&amp;L</th>
                         <th>Session</th>
+                        <th>Strategy</th>
                         <th>Status</th>
                         <th>Journal</th>
                     </tr>
                 </thead>
                 <tbody id="trades-tbody">
-                    <tr><td colspan="10" class="empty-state">Loading trades…</td></tr>
+                    <tr><td colspan="11" class="empty-state">Loading trades…</td></tr>
                 </tbody>
             </table>
         </div>
@@ -642,6 +697,10 @@
     <div class="modal">
         <div class="modal-title">📝 Trade Journal</div>
         <div class="modal-meta" id="journal-meta"></div>
+        <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;font-size:12px;color:#888">
+            <span>Strategy:</span>
+            <span id="journal-strategy-badge"></span>
+        </div>
         <textarea id="journal-textarea" placeholder="Add your trade notes here…"></textarea>
         <div class="modal-actions">
             <span class="saved-badge" id="saved-badge" style="display:none">✓ Saved!</span>
@@ -944,7 +1003,7 @@ function renderTrades(trades) {
 
     const tbody = document.getElementById('trades-tbody');
     if (!trades || trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No trades recorded yet</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No trades recorded yet</td></tr>';
         // Attach delegation listener on table (safe: no user data in markup)
         attachJournalListener();
         return;
@@ -961,6 +1020,9 @@ function renderTrades(trades) {
         const journalIcon = showJournal
             ? `<button class="btn-journal ${t.notes ? 'has-notes' : ''}" data-trade-id="${t.id}" title="${t.notes ? 'View/edit notes' : 'Add note'}">📝</button>`
             : '';
+        const strategyBadge = t.strategy === 'claude'
+            ? `<span class="badge-strategy-claude">🤖 Claude AI</span>`
+            : `<span class="badge-strategy-dtr">📐 DTR</span>`;
 
         html += `<tr>
             <td class="td-mono" style="white-space:nowrap;font-size:11px">${escHtml(dateStr)}</td>
@@ -971,12 +1033,13 @@ function renderTrades(trades) {
             <td class="td-right td-mono">${t.exitPrice != null ? fmtP(t.exitPrice) : '—'}</td>
             <td class="td-right td-mono ${pnlClass}">${escHtml(pnlText)}</td>
             <td style="font-size:11px;color:#666">${escHtml(t.session || '—')}</td>
+            <td>${strategyBadge}</td>
             <td class="${statusClass}" style="font-size:11px">${escHtml((t.status||'').toUpperCase())}</td>
             <td>${journalIcon}</td>
         </tr>`;
 
         if (t.notes) {
-            html += `<tr class="notes-preview-row"><td colspan="10">📌 ${escHtml(t.notes)}</td></tr>`;
+            html += `<tr class="notes-preview-row"><td colspan="11">📌 ${escHtml(t.notes)}</td></tr>`;
         }
     });
     tbody.innerHTML = html;
@@ -1015,6 +1078,14 @@ function openJournal(trade) {
     const dateStr = trade.entryTime ? new Date(trade.entryTime).toLocaleString() : '';
     document.getElementById('journal-meta').textContent =
         `${trade.instrument} · ${(trade.direction||'').toUpperCase()} · ${dateStr}`;
+    const stratBadge = document.getElementById('journal-strategy-badge');
+    if (trade.strategy === 'claude') {
+        stratBadge.className = 'badge-strategy-claude';
+        stratBadge.textContent = '🤖 Claude AI';
+    } else {
+        stratBadge.className = 'badge-strategy-dtr';
+        stratBadge.textContent = '📐 DTR Strategy';
+    }
     document.getElementById('journal-textarea').value = trade.notes || '';
     document.getElementById('saved-badge').style.display = 'none';
     document.getElementById('btn-save-notes').disabled = false;
@@ -1057,6 +1128,81 @@ async function saveNotes() {
 document.getElementById('journal-modal').addEventListener('click', function(e) {
     if (e.target === this) closeJournal();
 });
+
+// ─── Export trades ────────────────────────────────────────────────────────────
+async function fetchAllTradesForExport() {
+    let allTrades = [];
+    let page = 1;
+    const size = 200;
+    while (true) {
+        const data = await apiFetch(`/api/trades?page=${page}&pageSize=${size}`);
+        const batch = data.trades || [];
+        allTrades = allTrades.concat(batch);
+        if (allTrades.length >= (data.total || 0) || batch.length === 0) break;
+        page++;
+    }
+    return allTrades;
+}
+
+function tradesToRows(trades) {
+    return trades.map(t => ({
+        Date: t.entryTime ? new Date(t.entryTime).toLocaleString() : '',
+        Instrument: t.instrument || '',
+        Direction: (t.direction || '').toUpperCase(),
+        Session: (t.session || '').toUpperCase(),
+        Strategy: t.strategy === 'claude' ? 'Claude AI' : 'DTR Strategy',
+        Entry: t.entryPrice ?? '',
+        Exit: t.exitPrice ?? '',
+        SL: t.stopPrice ?? '',
+        TP1: t.tp1Price ?? '',
+        TP2: t.tp2Price ?? '',
+        PnL: t.pnl ?? '',
+        Status: (t.status || '').toUpperCase(),
+        Notes: t.notes ?? '',
+    }));
+}
+
+async function exportTrades(format) {
+    try {
+        const trades = await fetchAllTradesForExport();
+        if (trades.length === 0) { alert('No trades to export.'); return; }
+        const rows = tradesToRows(trades);
+        const filename = 'trades_' + new Date().toISOString().slice(0, 10);
+
+        if (format === 'csv') {
+            const headers = Object.keys(rows[0]);
+            const csv = [headers.join(',')]
+                .concat(rows.map(r => headers.map(h => {
+                    const v = String(r[h] ?? '').replace(/"/g, '""');
+                    return `"${v}"`;
+                }).join(',')))
+                .join('\r\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename + '.csv';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        } else {
+            // XLSX via SheetJS CDN
+            if (!window.XLSX) {
+                await new Promise((res, rej) => {
+                    const s = document.createElement('script');
+                    s.src = 'https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js';
+                    s.onload = res;
+                    s.onerror = () => rej(new Error('SheetJS failed to load'));
+                    document.head.appendChild(s);
+                });
+            }
+            const ws = window.XLSX.utils.json_to_sheet(rows);
+            const wb = window.XLSX.utils.book_new();
+            window.XLSX.utils.book_append_sheet(wb, ws, 'Trades');
+            window.XLSX.writeFile(wb, filename + '.xlsx');
+        }
+    } catch (e) {
+        alert('Export failed: ' + e.message);
+    }
+}
 
 // ─── Polling orchestration ────────────────────────────────────────────────────
 function getActiveTab() {

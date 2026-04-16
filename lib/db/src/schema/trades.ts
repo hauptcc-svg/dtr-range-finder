@@ -19,6 +19,7 @@ export const tradesTable = pgTable("trades", {
   tp2Price: real("tp2_price"),
   projectxOrderId: text("projectx_order_id"),
   notes: text("notes"),
+  strategy: text("strategy").default("dtr"),
 });
 
 export const insertTradeSchema = createInsertSchema(tradesTable).omit({ id: true });
