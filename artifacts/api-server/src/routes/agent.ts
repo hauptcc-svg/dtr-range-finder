@@ -204,4 +204,17 @@ router.post("/agent/mode", requireAgentKeyOrSession, (req: Request, res: Respons
   res.json({ ...result, claudeAutonomousMode: agentController.getAutonomousMode() });
 });
 
+// ---------------------------------------------------------------------------
+// GET /api/account — live TopStep account info (balance, name, canTrade)
+// No auth required — balance is not sensitive enough to lock behind auth
+// ---------------------------------------------------------------------------
+router.get("/account", async (_req, res): Promise<void> => {
+  const info = await agentController.getAccountInfo();
+  if (!info) {
+    res.status(503).json({ error: "Account info unavailable — agent may not be authenticated yet" });
+    return;
+  }
+  res.json(info);
+});
+
 export default router;

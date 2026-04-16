@@ -134,6 +134,11 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
     win_count = summary_resp.get("winCount", 0)
     win_rate = (win_count / trade_count) if trade_count > 0 else 0
 
+    account_resp = _ts_get("/account", timeout=6)
+    balance = account_resp.get("balance")
+    account_name = account_resp.get("accountName", "")
+    can_trade = account_resp.get("canTrade", True)
+
     return {
         "success": True,
         "timestamp": datetime.now().isoformat(),
@@ -152,7 +157,9 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
         },
         "position_limits": {**POSITION_LIMITS, "enforced": True},
         "p_and_l": {
-            "balance": None,
+            "balance": balance,
+            "account_name": account_name,
+            "can_trade": can_trade,
             "daily_pnl": ts_status.get("dailyPnl", 0),
             "daily_loss_hit": ts_status.get("dailyLossHit", False),
             "daily_profit_hit": ts_status.get("dailyProfitHit", False),
@@ -277,6 +284,16 @@ def live_dashboard():
     if "error" in ts_status:
         return jsonify({"success": False, "error": ts_status["error"]}), 502
     return jsonify(_build_dashboard_payload(ts_status))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ACCOUNT INFO  (proxy to TypeScript API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/account")
+def get_account():
+    body, status = _ts_request("GET", "/account", timeout=8)
+    return jsonify(body), status
 
 
 # ═══════════════════════════════════════════════════════════════════════════

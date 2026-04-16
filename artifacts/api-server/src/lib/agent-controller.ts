@@ -87,11 +87,52 @@ class AgentController {
   private lastClaudeAutonomousTick = 0;
   // How often to call Claude in autonomous mode (ms)
   private readonly CLAUDE_AUTONOMOUS_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  // Cached account info (updated on start and on demand)
+  private cachedAccountInfo: { balance: number; accountId: number; accountName: string; canTrade: boolean } | null = null;
 
   constructor() {
     // Initialize instrument states
     for (const symbol of Object.keys(TRADING_CONFIG.instruments)) {
       this.instrumentStates.set(symbol, createInstrumentState(symbol));
+    }
+  }
+
+  // ─── Telegram helper ──────────────────────────────────────────────────────
+  private async sendTelegram(text: string): Promise<void> {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    if (!token || !chatId) return;
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+      });
+    } catch (err) {
+      logger.warn({ err }, "Telegram send failed (non-fatal)");
+    }
+  }
+
+  // ─── Public account info ──────────────────────────────────────────────────
+  async getAccountInfo(): Promise<{ balance: number; accountId: number; accountName: string; canTrade: boolean } | null> {
+    try {
+      if (this.client) {
+        // Agent is running — fetch fresh data from live client
+        const info = await this.client.getAccountInfo();
+        this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: true };
+        return this.cachedAccountInfo;
+      }
+      // Agent not running — return cached value if we have it
+      if (this.cachedAccountInfo) return this.cachedAccountInfo;
+      // No cache and no running client — create a temporary client
+      const tempClient = getProjectXClient();
+      await tempClient.authenticate();
+      const info = await tempClient.getAccountInfo();
+      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: true };
+      return this.cachedAccountInfo;
+    } catch (err) {
+      logger.warn({ err }, "Failed to fetch account info");
+      return this.cachedAccountInfo ?? null;
     }
   }
 
@@ -274,6 +315,20 @@ class AgentController {
           { symbol: decision.symbol, action: decision.action, price, reasoning: decision.reasoning },
           "Claude autonomous: trade placed"
         );
+
+        this.sendTelegram(
+          `🧠 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
+          `<b>${config.name ?? decision.symbol}</b> (${decision.symbol})\n` +
+          `<b>Direction:</b> ${decision.action.toUpperCase()}\n` +
+          `<b>Qty:</b> ${config.qty}\n` +
+          `<b>Entry:</b> ${price.toFixed(2)}\n` +
+          `<b>Stop:</b> ${stopPrice.toFixed(2)}\n` +
+          `<b>TP1:</b> ${tp1Price.toFixed(2)}\n` +
+          `<b>Mode:</b> Claude AI (Auto)\n` +
+          `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n` +
+          `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+          `<i>${new Date().toUTCString()}</i>`
+        ).catch(() => {});
       } catch (err) {
         logger.error({ err, symbol: decision.symbol }, "Failed to place autonomous trade");
       }
@@ -415,6 +470,19 @@ class AgentController {
 
           tradesPlaced.push(`${decision.symbol} ${decision.action.toUpperCase()}`);
           logger.info({ symbol: decision.symbol, action: decision.action }, "Claude autonomous manual trade placed");
+          this.sendTelegram(
+            `🧠 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
+            `<b>${config.name ?? decision.symbol}</b> (${decision.symbol})\n` +
+            `<b>Direction:</b> ${decision.action.toUpperCase()}\n` +
+            `<b>Qty:</b> ${config.qty}\n` +
+            `<b>Entry:</b> ${price.toFixed(2)}\n` +
+            `<b>Stop:</b> ${stopPrice.toFixed(2)}\n` +
+            `<b>TP1:</b> ${tp1Price.toFixed(2)}\n` +
+            `<b>Mode:</b> Claude AI (Manual)\n` +
+            `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n` +
+            `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+            `<i>${new Date().toUTCString()}</i>`
+          ).catch(() => {});
         } catch (err) {
           logger.error({ err, symbol: decision.symbol }, "Error placing autonomous manual trade");
         }
@@ -538,6 +606,19 @@ class AgentController {
 
         tradesPlaced.push(`${decision.symbol} ${decision.action.toUpperCase()}`);
         logger.info({ symbol: decision.symbol, action: decision.action }, "Claude DTR trade placed");
+        this.sendTelegram(
+          `📊 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
+          `<b>${config.name ?? decision.symbol}</b> (${decision.symbol})\n` +
+          `<b>Direction:</b> ${decision.action.toUpperCase()}\n` +
+          `<b>Qty:</b> ${config.qty}\n` +
+          `<b>Entry:</b> ${entryPrice.toFixed(2)}\n` +
+          `<b>Stop:</b> ${stopPrice.toFixed(2)}\n` +
+          `<b>TP1:</b> ${tp1Price.toFixed(2)}\n` +
+          `<b>Mode:</b> Claude + DTR (Manual)\n` +
+          `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n` +
+          `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+          `<i>${new Date().toUTCString()}</i>`
+        ).catch(() => {});
       } catch (err) {
         logger.error({ err, symbol: decision.symbol }, "Error placing Claude DTR trade");
       }
@@ -586,6 +667,15 @@ class AgentController {
     this.running = true;
     this.errorMessage = null;
 
+    // Cache account info after successful authentication
+    try {
+      const info = await this.client!.getAccountInfo();
+      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: true };
+      logger.info({ balance: info.balance, accountName: info.name }, "Account info cached");
+    } catch (err) {
+      logger.warn({ err }, "Could not cache account info on start");
+    }
+
     // Start the tick loop
     this.tickInterval = setInterval(() => {
       this.tick().catch((err) => {
@@ -600,6 +690,14 @@ class AgentController {
     });
 
     logger.info("DTR trading agent started");
+    const modeLabel = this.claudeAutonomousMode ? "Claude AI" : "DTR Rules";
+    this.sendTelegram(
+      `🚀 <b>DeclanCapital FX Agent Started</b>\n\n` +
+      `<b>Mode:</b> ${modeLabel}\n` +
+      `<b>Account:</b> ${this.cachedAccountInfo?.accountName ?? "—"}\n` +
+      `<b>Balance:</b> $${this.cachedAccountInfo?.balance?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}\n` +
+      `<i>${new Date().toUTCString()}</i>`
+    ).catch(() => {});
     return { success: true, message: "Agent started successfully" };
   }
 
@@ -618,6 +716,12 @@ class AgentController {
     this.running = false;
     this.sessionPhase = "idle";
     logger.info("DTR trading agent stopped");
+    this.sendTelegram(
+      `⏹ <b>DeclanCapital FX Agent Stopped</b>\n\n` +
+      `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+      `<b>Trades today:</b> ${this.tradeCount}\n` +
+      `<i>${new Date().toUTCString()}</i>`
+    ).catch(() => {});
 
     return { success: true, message: "Agent stopped successfully" };
   }
@@ -941,6 +1045,13 @@ class AgentController {
         logger.warn({ dailyPnl: this.dailyPnl }, "Daily loss limit hit, stopping trading");
         this.sessionPhase = "daily_limit_hit";
         await this.flattenAllPositions("loss_limit_hit");
+        this.sendTelegram(
+          `🚨 <b>DAILY LOSS LIMIT HIT</b> · DeclanCapital FX\n\n` +
+          `<b>Daily P&amp;L:</b> $${this.dailyPnl.toFixed(2)}\n` +
+          `<b>Limit:</b> -$${TRADING_CONFIG.dailyLossLimit}\n` +
+          `<b>All trading halted.</b>\n` +
+          `<i>${new Date().toUTCString()}</i>`
+        ).catch(() => {});
       }
       return;
     }
@@ -950,6 +1061,13 @@ class AgentController {
         logger.info({ dailyPnl: this.dailyPnl }, "Daily profit target hit, stopping trading");
         this.sessionPhase = "daily_limit_hit";
         await this.flattenAllPositions("profit_target_hit");
+        this.sendTelegram(
+          `🎯 <b>DAILY PROFIT TARGET HIT</b> · DeclanCapital FX\n\n` +
+          `<b>Daily P&amp;L:</b> +$${this.dailyPnl.toFixed(2)}\n` +
+          `<b>Target:</b> +$${TRADING_CONFIG.dailyProfitTarget}\n` +
+          `<b>All trading halted — great day!</b>\n` +
+          `<i>${new Date().toUTCString()}</i>`
+        ).catch(() => {});
       }
       return;
     }
@@ -1098,6 +1216,20 @@ class AgentController {
 
         this.tradeCount++;
         await this.updateDailySummary();
+
+        this.sendTelegram(
+          `📈 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
+          `<b>${config.name ?? symbol}</b> (${symbol})\n` +
+          `<b>Direction:</b> ${signal.direction.toUpperCase()}\n` +
+          `<b>Qty:</b> ${config.qty}\n` +
+          `<b>Entry:</b> ${signal.entryPrice.toFixed(2)}\n` +
+          `<b>Stop:</b> ${signal.stopPrice.toFixed(2)}\n` +
+          `<b>TP1:</b> ${signal.tp1Price.toFixed(2)}\n` +
+          `<b>Session:</b> ${session.toUpperCase()}\n` +
+          `<b>Mode:</b> DTR Rules\n` +
+          `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+          `<i>${new Date().toUTCString()}</i>`
+        ).catch(() => {});
       } catch (err) {
         logger.error({ err, symbol }, "Error processing entry signal");
       }
@@ -1238,6 +1370,18 @@ class AgentController {
           await this.updateDailySummary();
 
           logger.info({ symbol, pnl, exitPrice, direction: state.positionDirection }, "Trade closed");
+
+          const closedDir = state.positionDirection;
+          const instName = TRADING_CONFIG.instruments[symbol]?.name ?? symbol;
+          this.sendTelegram(
+            `${pnl >= 0 ? "✅" : "❌"} <b>TRADE CLOSED</b> · DeclanCapital FX\n\n` +
+            `<b>${instName}</b> (${symbol})\n` +
+            `<b>Direction:</b> ${(closedDir ?? "").toUpperCase()}\n` +
+            `<b>Exit:</b> ${exitPrice.toFixed(2)}\n` +
+            `<b>P&amp;L:</b> <b>${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}</b>\n` +
+            `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+            `<i>${new Date().toUTCString()}</i>`
+          ).catch(() => {});
 
           state.inPosition = false;
           state.positionDirection = null;

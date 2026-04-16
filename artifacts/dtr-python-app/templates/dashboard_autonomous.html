@@ -434,6 +434,7 @@
 <div class="header">
     <span style="font-size:22px">⚡</span>
     <h1>DTR TRADING AGENT</h1>
+    <a href="https://topstep-bot-hauptcc.replit.app/" target="_blank" rel="noopener" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(0,255,136,0.08);border:1px solid rgba(0,255,136,0.25);border-radius:6px;color:#00ff88;font-size:11px;font-family:'Courier New',monospace;font-weight:bold;text-decoration:none;text-transform:uppercase;letter-spacing:1px;transition:background 0.2s" onmouseover="this.style.background='rgba(0,255,136,0.15)'" onmouseout="this.style.background='rgba(0,255,136,0.08)'">🔗 TopStep Live</a>
 </div>
 
 <!-- ═══════ Tab Bar ═══════ -->
@@ -495,7 +496,15 @@
             <div class="card-title">💰 Account</div>
             <div class="data-item">
                 <span class="data-label">Balance</span>
-                <span class="data-value" id="balance">—</span>
+                <span class="data-value positive" id="balance">—</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">Account</span>
+                <span class="data-value" id="account-name" style="font-size:11px;color:#888">—</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">Can Trade</span>
+                <span class="data-value" id="can-trade">—</span>
             </div>
             <div class="data-item">
                 <span class="data-label">Daily P&amp;L</span>
@@ -696,7 +705,23 @@ async function updateDashboard() {
 
         const pl = data.p_and_l || {};
         const bal = pl.balance;
-        document.getElementById('balance').textContent = bal != null ? '$' + (bal/1000).toFixed(0) + 'K' : '—';
+        document.getElementById('balance').textContent = bal != null
+            ? '$' + Number(bal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : '—';
+        const accName = pl.account_name || '';
+        document.getElementById('account-name').textContent = accName || '—';
+        const canTrade = pl.can_trade;
+        const ctEl = document.getElementById('can-trade');
+        if (canTrade === true) {
+            ctEl.textContent = '✅ YES';
+            ctEl.style.color = '#10b981';
+        } else if (canTrade === false) {
+            ctEl.textContent = '❌ NO';
+            ctEl.style.color = '#ef4444';
+        } else {
+            ctEl.textContent = '—';
+            ctEl.style.color = '';
+        }
 
         const dailyPnl = pl.daily_pnl || 0;
         const pnlEl = document.getElementById('daily-pnl');
