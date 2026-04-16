@@ -13,7 +13,7 @@ Author: Claude
 import json
 import logging
 from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 import statistics
 import os

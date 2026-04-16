@@ -21,6 +21,11 @@ DTR (Draw The Range) Multi-Instrument Trading Agent + Dashboard. A full-stack au
 
 - **`artifacts/api-server`** — Express API server (port 8080, path `/api`)
 - **`artifacts/dtr-dashboard`** — React/Vite monitoring dashboard (path `/`)
+- **`artifacts/dtr-python-app`** — Python/Flask autonomous trading UI (port 5000, path `/dtr-python`)
+  - Proxies all ProjectX API calls through the TypeScript API server (Python DNS can't resolve gateway.projectx.com in dev)
+  - `StripPrefixMiddleware` handles `/dtr-python` → `/` path stripping
+  - `BASE_PATH` env var controls the URL prefix; HTML template injects it via `window.DTR_BASE`
+  - Registered as the `python` service under the `dtr-dashboard` artifact to enable path-based routing
 
 ## Trading System
 

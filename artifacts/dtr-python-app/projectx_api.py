@@ -6,6 +6,7 @@ Handles authentication, market data, orders, positions, and account management
 """
 
 import aiohttp
+import aiohttp.resolver
 import asyncio
 import logging
 from typing import Optional, Dict, Any, List
@@ -21,11 +22,11 @@ class ProjectXAPI:
     def __init__(
         self,
         username: str,
-        password: str,
+        api_key: str,
         account_id: str
     ):
         self.username = username
-        self.password = password
+        self.api_key = api_key
         self.account_id = account_id
         
         self.base_url = "https://gateway.projectx.com"
@@ -41,27 +42,32 @@ class ProjectXAPI:
     
     async def connect(self) -> bool:
         """Connect and authenticate to ProjectX"""
-        self.session = aiohttp.ClientSession()
+        # Use ThreadedResolver so aiohttp falls back to the system's standard
+        # DNS resolver (getaddrinfo in a thread pool) — required on Replit where
+        # the default async DNS resolver cannot resolve external hostnames.
+        resolver = aiohttp.resolver.ThreadedResolver()
+        connector = aiohttp.TCPConnector(resolver=resolver)
+        self.session = aiohttp.ClientSession(connector=connector)
         return await self.authenticate()
     
     async def authenticate(self) -> bool:
-        """Login and get access token"""
+        """Login and get access token using API key"""
         try:
-            self.logger.info(f"🔐 Authenticating as {self.username}...")
+            self.logger.info(f"🔐 Authenticating as {self.username} (API key)...")
             
             auth_data = {
-                "username": self.username,
-                "password": self.password
+                "userName": self.username,
+                "apiKey": self.api_key
             }
             
             async with self.session.post(
-                f"{self.base_url}/auth/login",
+                f"{self.base_url}/api/Auth/loginKey",
                 json=auth_data,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    self.access_token = data.get("access_token")
+                    self.access_token = data.get("token") or data.get("access_token")
                     self.refresh_token = data.get("refresh_token")
                     expires_in = data.get("expires_in", 86400)
                     self.token_expires_at = datetime.now() + timedelta(seconds=expires_in)

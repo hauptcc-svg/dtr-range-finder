@@ -29,3 +29,15 @@ to = "/index.html"
 [services.env]
 PORT = "8081"
 BASE_PATH = "/"
+
+[[services]]
+name = "python"
+paths = [ "/dtr-python" ]
+localPort = 5000
+
+[services.development]
+run = "cd /home/runner/workspace/artifacts/dtr-python-app && PORT=5000 BASE_PATH=/dtr-python python flask_autonomous_trading.py"
+
+[services.env]
+PORT = "5000"
+BASE_PATH = "/dtr-python"

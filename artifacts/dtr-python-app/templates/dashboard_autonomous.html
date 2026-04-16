@@ -319,14 +319,17 @@
     </div>
 
     <script>
+        // Base path injected by Flask (empty string when served at root)
+        window.DTR_BASE = '{{ base_path }}';
+
         // Auto-refresh every 2 seconds
         setInterval(updateDashboard, 2000);
 
         async function switchMode(mode) {
             try {
-                const endpoint = mode === 'dtr' ? '/api/mode/dtr' :
+                const endpoint = window.DTR_BASE + (mode === 'dtr' ? '/api/mode/dtr' :
                                 mode === 'claude' ? '/api/mode/claude' :
-                                '/api/mode/halt';
+                                '/api/mode/halt');
 
                 const res = await fetch(endpoint, { method: 'POST' });
                 const data = await res.json();
@@ -344,7 +347,7 @@
 
         async function updateDashboard() {
             try {
-                const res = await fetch('/api/live/dashboard');
+                const res = await fetch(window.DTR_BASE + '/api/live/dashboard');
                 const data = await res.json();
 
                 if (!data.success) return;
@@ -367,9 +370,9 @@
                 };
                 document.getElementById('mode-description').textContent = descriptions[mode];
 
-                // Update daily trades
-                const dtrTrades = data.orchestrator.daily_trades.dtr;
-                const claudeTrades = data.orchestrator.daily_trades.claude;
+                // Update daily trades (use values from p_and_l if available)
+                const dtrTrades = (data.orchestrator.daily_trades || {}).dtr || 0;
+                const claudeTrades = (data.orchestrator.daily_trades || {}).claude || 0;
                 const total = dtrTrades + claudeTrades;
                 document.getElementById('daily-trades').textContent = `${total}/4`;
                 document.getElementById('trades-detail').textContent = `DTR: ${dtrTrades}, Claude: ${claudeTrades}`;
