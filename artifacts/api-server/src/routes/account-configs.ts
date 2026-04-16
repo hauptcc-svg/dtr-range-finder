@@ -145,10 +145,12 @@ router.post("/account-configs/:id/activate", requireAgentKeyOrSession, async (re
     return;
   }
 
-  // Persist the new active account in the database
+  // Persist the new active account in the database (transactional to avoid intermediate no-active state)
   try {
-    await db.update(accountConfigsTable).set({ isActive: false }).where(ne(accountConfigsTable.id, rowId));
-    await db.update(accountConfigsTable).set({ isActive: true }).where(eq(accountConfigsTable.id, rowId));
+    await db.transaction(async (tx) => {
+      await tx.update(accountConfigsTable).set({ isActive: false }).where(ne(accountConfigsTable.id, rowId));
+      await tx.update(accountConfigsTable).set({ isActive: true }).where(eq(accountConfigsTable.id, rowId));
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err }, "Failed to update isActive flags in DB after account switch");

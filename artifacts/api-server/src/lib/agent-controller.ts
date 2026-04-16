@@ -447,10 +447,32 @@ class AgentController {
       return { success: false, message: "Could not flatten positions on the current account." };
     }
 
-    // 2. Update the ProjectXClient with the new account ID
+    // 2. Capture the old account ID so we can revert on failure
+    const oldAccountId = this.cachedAccountInfo?.accountId ?? null;
+
+    // 3. Update the ProjectXClient with the new account ID
     this.client.setAccountId(newAccountId);
 
-    // 3. Reset daily counters and instrument states
+    // 4. Validate the new account — revert on failure
+    let newInfo: { balance: number; id: number; name: string; canTrade: boolean };
+    try {
+      newInfo = await this.client.getAccountInfo();
+    } catch (err) {
+      // Revert client to old account
+      if (oldAccountId !== null) this.client.setAccountId(oldAccountId);
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err, newAccountId, oldAccountId }, "Account validation failed — reverted to previous account");
+      return { success: false, message: `Account validation failed: ${msg}` };
+    }
+
+    if (!newInfo.canTrade) {
+      // Revert client to old account
+      if (oldAccountId !== null) this.client.setAccountId(oldAccountId);
+      logger.warn({ newAccountId }, "New account canTrade=false — reverted to previous account");
+      return { success: false, message: `Account ${newAccountId} exists but canTrade=false.` };
+    }
+
+    // 5. Validation succeeded — reset daily counters and instrument states
     this.dailyPnl = 0;
     this.tradeCount = 0;
     this.sessionPhase = "idle";
@@ -462,18 +484,8 @@ class AgentController {
       });
     }
 
-    // 4. Validate the new account
-    try {
-      const info = await this.client.getAccountInfo();
-      if (!info.canTrade) {
-        return { success: false, message: `Account ${newAccountId} exists but canTrade=false.` };
-      }
-      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: info.canTrade };
-      logger.info({ accountId: newAccountId, accountName: info.name, balance: info.balance }, "Account switched successfully");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, message: `Account validation failed: ${msg}` };
-    }
+    this.cachedAccountInfo = { balance: newInfo.balance, accountId: newInfo.id, accountName: newInfo.name, canTrade: newInfo.canTrade };
+    logger.info({ accountId: newAccountId, accountName: newInfo.name, balance: newInfo.balance }, "Account switched successfully");
 
     this.sendTelegram(
       `🔄 <b>ACCOUNT SWITCHED</b> · DeclanCapital FX\n\n` +
@@ -1012,6 +1024,31 @@ class AgentController {
 
     // Seed account_configs table on first run
     await this.seedAccountConfigs();
+
+    // Restore the last active account from DB (may differ from the env-var default)
+    try {
+      const activeRows = await db.select().from(accountConfigsTable).where(eq(accountConfigsTable.isActive, true)).limit(1);
+      if (activeRows.length > 0) {
+        const activeAccountId = activeRows[0].accountId;
+        const envAccountId = parseInt(process.env.PROJECTX_ACCOUNT_ID ?? "0", 10);
+        if (activeAccountId !== envAccountId) {
+          logger.info({ activeAccountId, envAccountId }, "Restoring last active account from DB (differs from env var)");
+          this.client!.setAccountId(activeAccountId);
+          // Refresh cached account info for the restored account
+          try {
+            const info = await this.client!.getAccountInfo();
+            this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: info.canTrade };
+            logger.info({ accountId: info.id, accountName: info.name }, "Active account restored from DB");
+          } catch (err) {
+            logger.error({ err, activeAccountId }, "Could not fetch account info after restoring from DB — check account ID");
+          }
+        } else {
+          logger.info({ activeAccountId }, "Active account in DB matches env var — no switch needed");
+        }
+      }
+    } catch (err) {
+      logger.error({ err }, "Failed to restore active account from DB — using env var default");
+    }
 
     // Seed DB with static instruments if first run, then load from DB
     await this.seedInstrumentConfigs();
