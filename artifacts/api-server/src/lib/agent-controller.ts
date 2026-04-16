@@ -702,7 +702,7 @@ class AgentController {
 
   /**
    * Manually close an open position for a given instrument symbol.
-   * Works whether or not the agent is running.
+   * Requires the agent to be running (needs an active ProjectX client).
    */
   async closePositionForSymbol(symbol: string): Promise<{ success: boolean; message: string }> {
     const state = this.instrumentStates.get(symbol);
