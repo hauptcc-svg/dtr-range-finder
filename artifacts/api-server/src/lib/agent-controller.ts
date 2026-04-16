@@ -119,7 +119,7 @@ class AgentController {
       if (this.client) {
         // Agent is running — fetch fresh data from live client
         const info = await this.client.getAccountInfo();
-        this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: true };
+        this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: info.canTrade };
         return this.cachedAccountInfo;
       }
       // Agent not running — return cached value if we have it
@@ -128,7 +128,7 @@ class AgentController {
       const tempClient = getProjectXClient();
       await tempClient.authenticate();
       const info = await tempClient.getAccountInfo();
-      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: true };
+      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: info.canTrade };
       return this.cachedAccountInfo;
     } catch (err) {
       logger.warn({ err }, "Failed to fetch account info");
@@ -324,6 +324,7 @@ class AgentController {
           `<b>Entry:</b> ${price.toFixed(2)}\n` +
           `<b>Stop:</b> ${stopPrice.toFixed(2)}\n` +
           `<b>TP1:</b> ${tp1Price.toFixed(2)}\n` +
+          `<b>TP2:</b> —\n` +
           `<b>Mode:</b> Claude AI (Auto)\n` +
           `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n` +
           `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
@@ -478,6 +479,7 @@ class AgentController {
             `<b>Entry:</b> ${price.toFixed(2)}\n` +
             `<b>Stop:</b> ${stopPrice.toFixed(2)}\n` +
             `<b>TP1:</b> ${tp1Price.toFixed(2)}\n` +
+            `<b>TP2:</b> —\n` +
             `<b>Mode:</b> Claude AI (Manual)\n` +
             `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n` +
             `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
@@ -614,6 +616,7 @@ class AgentController {
           `<b>Entry:</b> ${entryPrice.toFixed(2)}\n` +
           `<b>Stop:</b> ${stopPrice.toFixed(2)}\n` +
           `<b>TP1:</b> ${tp1Price.toFixed(2)}\n` +
+          `<b>TP2:</b> ${tp2Price.toFixed(2)}\n` +
           `<b>Mode:</b> Claude + DTR (Manual)\n` +
           `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n` +
           `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
@@ -1225,6 +1228,7 @@ class AgentController {
           `<b>Entry:</b> ${signal.entryPrice.toFixed(2)}\n` +
           `<b>Stop:</b> ${signal.stopPrice.toFixed(2)}\n` +
           `<b>TP1:</b> ${signal.tp1Price.toFixed(2)}\n` +
+          `<b>TP2:</b> ${signal.tp2Price != null ? signal.tp2Price.toFixed(2) : "—"}\n` +
           `<b>Session:</b> ${session.toUpperCase()}\n` +
           `<b>Mode:</b> DTR Rules\n` +
           `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +

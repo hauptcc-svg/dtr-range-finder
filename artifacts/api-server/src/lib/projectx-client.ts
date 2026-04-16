@@ -20,6 +20,7 @@ export interface AccountInfo {
   name: string;
   balance: number;
   buyingPower: number;
+  canTrade: boolean;
 }
 
 export interface OrderResult {
@@ -128,6 +129,7 @@ export class ProjectXClient {
       name: account.name,
       balance: account.balance,
       buyingPower: account.balance, // API doesn't expose separate buying power
+      canTrade: account.canTrade ?? true,
     };
   }
 

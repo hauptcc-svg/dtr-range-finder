@@ -137,7 +137,7 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
     account_resp = _ts_get("/account", timeout=6)
     balance = account_resp.get("balance")
     account_name = account_resp.get("accountName", "")
-    can_trade = account_resp.get("canTrade", True)
+    can_trade = account_resp.get("canTrade", None)
 
     return {
         "success": True,
