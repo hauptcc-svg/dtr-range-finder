@@ -18,7 +18,7 @@ import {
   calculatePnl,
   type InstrumentState,
 } from "./dtr-strategy";
-import { getClaudeTradeAdvice, type ClaudeAdvice } from "./claude-advisor";
+import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, type ClaudeAdvice } from "./claude-advisor";
 import { db, tradesTable, dailySummaryTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 
@@ -41,6 +41,8 @@ export interface AgentStatusData {
   lastUpdated: string;
   authenticatedWithProjectX: boolean;
   errorMessage: string | null;
+  claudeAutonomousMode: boolean;
+  lastClaudeAutonomousTick: string | null;
 }
 
 export interface InstrumentStatusData {
@@ -80,6 +82,11 @@ class AgentController {
   private lastPositionFetch = 0;
   // Runtime enabled/disabled overrides per instrument (persists until process restart)
   private instrumentEnabledOverrides: Map<string, boolean> = new Map();
+  // Claude Autonomous Mode — bypasses all DTR rules, Claude decides freely
+  private claudeAutonomousMode = false;
+  private lastClaudeAutonomousTick = 0;
+  // How often to call Claude in autonomous mode (ms)
+  private readonly CLAUDE_AUTONOMOUS_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor() {
     // Initialize instrument states
@@ -104,6 +111,169 @@ class AgentController {
     this.instrumentEnabledOverrides.set(symbol, enabled);
     logger.info({ symbol, enabled }, "Instrument toggled");
     return { success: true, message: `${symbol} ${enabled ? "enabled" : "disabled"}` };
+  }
+
+  /** Enable or disable Claude Autonomous Mode. */
+  setAutonomousMode(enabled: boolean): { success: boolean; message: string } {
+    this.claudeAutonomousMode = enabled;
+    if (enabled) {
+      // Force an immediate autonomous tick on next cycle
+      this.lastClaudeAutonomousTick = 0;
+    }
+    logger.info({ claudeAutonomousMode: enabled }, "Trading mode changed");
+    return {
+      success: true,
+      message: enabled
+        ? "Claude Autonomous Mode enabled — DTR rules bypassed, Claude trading freely."
+        : "DTR Rules Mode restored.",
+    };
+  }
+
+  /** Returns the current trading mode. */
+  getAutonomousMode(): boolean {
+    return this.claudeAutonomousMode;
+  }
+
+  /**
+   * Autonomous tick: fetch recent bars + prices for all enabled instruments,
+   * send to Claude, execute its decisions (long/short/close/skip).
+   * Rate-limited to CLAUDE_AUTONOMOUS_INTERVAL_MS.
+   */
+  private async autonomousTick(): Promise<void> {
+    if (!this.client) return;
+    const now = Date.now();
+    if (now - this.lastClaudeAutonomousTick < this.CLAUDE_AUTONOMOUS_INTERVAL_MS) return;
+
+    logger.info("Running Claude autonomous tick");
+
+    const eligibleInstruments = Array.from(this.instrumentStates.entries())
+      .filter(([symbol]) => this.isInstrumentEnabled(symbol))
+      .map(([symbol, state]) => ({
+        state,
+        config: TRADING_CONFIG.instruments[symbol],
+      }))
+      .filter(({ config }) => !!config);
+
+    if (eligibleInstruments.length === 0) return;
+
+    // Fetch recent 1-min bars (last 30 min) + current price for each instrument
+    const windowEnd = new Date();
+    const windowStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);
+
+    const instrumentsWithBars = await Promise.all(
+      eligibleInstruments.map(async ({ state, config }) => {
+        let recentBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
+        if (state.contractId && this.client) {
+          try {
+            const bars = await this.client.getBars(state.contractId, windowStart, windowEnd);
+            recentBars = bars.map((b) => ({
+              t: new Date(b.t).toISOString(),
+              o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
+            }));
+            if (recentBars.length > 0) {
+              state.lastPrice = recentBars[recentBars.length - 1].c;
+            }
+          } catch (err) {
+            logger.warn({ err, symbol: state.symbol }, "Failed to fetch bars for autonomous tick");
+          }
+        }
+        return { state, config, recentBars };
+      })
+    );
+
+    let advice: ClaudeAdvice;
+    try {
+      advice = await getClaudeAutonomousAdvice(
+        instrumentsWithBars,
+        this.dailyPnl,
+        TRADING_CONFIG.dailyLossLimit,
+        TRADING_CONFIG.dailyProfitTarget
+      );
+    } catch (err) {
+      logger.error({ err }, "Claude autonomous advice failed");
+      return;
+    }
+
+    this.lastClaudeAutonomousTick = Date.now();
+    logger.info({ summary: advice.summary, decisions: advice.decisions }, "Claude autonomous advice");
+
+    // Execute decisions
+    for (const decision of advice.decisions) {
+      const state = this.instrumentStates.get(decision.symbol);
+      const config = TRADING_CONFIG.instruments[decision.symbol];
+      if (!state || !config || !state.contractId) continue;
+
+      // Guard: daily limits
+      if (this.dailyPnl <= -TRADING_CONFIG.dailyLossLimit) break;
+
+      if (decision.action === "close") {
+        if (!state.inPosition) continue;
+        try {
+          await this.client!.closePositionForContract(state.contractId);
+          logger.info({ symbol: decision.symbol, reasoning: decision.reasoning }, "Claude autonomous: closed position");
+        } catch (err) {
+          logger.error({ err, symbol: decision.symbol }, "Failed to close position (autonomous)");
+        }
+        continue;
+      }
+
+      if (decision.action === "skip") continue;
+
+      // Long or short entry
+      if (state.inPosition) continue;
+      if (state.todayTrades >= config.maxTradesPerDay) continue;
+
+      const isBuy = decision.action === "long";
+      const price = state.lastPrice;
+      if (!price) continue;
+
+      // Simple ATR-based stops: use 0.5% of price as stop, 1% as TP
+      const stopDist = price * 0.005;
+      const stopPrice = isBuy ? price - stopDist : price + stopDist;
+      const tp1Price = isBuy ? price + stopDist * 2 : price - stopDist * 2;
+
+      try {
+        const orderResult = await this.client!.placeBracketOrder({
+          contractId: state.contractId,
+          isBuy,
+          qty: config.qty,
+          stopPrice,
+          tp1Price,
+        });
+
+        const [trade] = await db
+          .insert(tradesTable)
+          .values({
+            instrument: decision.symbol,
+            direction: decision.action,
+            entryPrice: price,
+            qty: config.qty,
+            stopPrice,
+            tp1Price,
+            session: "claude_auto",
+            status: "open",
+            orderId: orderResult.orderId,
+            entryTime: new Date(),
+          })
+          .returning();
+
+        state.inPosition = true;
+        state.positionDirection = decision.action;
+        state.positionQty = config.qty;
+        state.positionEntryPrice = price;
+        state.positionOpenedAt = new Date().toISOString();
+        state.openTradeId = trade.id;
+        state.todayTrades++;
+        this.tradeCount++;
+
+        logger.info(
+          { symbol: decision.symbol, action: decision.action, price, reasoning: decision.reasoning },
+          "Claude autonomous: trade placed"
+        );
+      } catch (err) {
+        logger.error({ err, symbol: decision.symbol }, "Failed to place autonomous trade");
+      }
+    }
   }
 
   /**
@@ -325,6 +495,11 @@ class AgentController {
       lastUpdated: this.lastUpdated,
       authenticatedWithProjectX: this.authenticatedWithProjectX,
       errorMessage: this.errorMessage,
+      claudeAutonomousMode: this.claudeAutonomousMode,
+      lastClaudeAutonomousTick:
+        this.lastClaudeAutonomousTick > 0
+          ? new Date(this.lastClaudeAutonomousTick).toISOString()
+          : null,
     };
   }
 
@@ -615,9 +790,6 @@ class AgentController {
       return;
     }
 
-    const phase = this.getCurrentPhase();
-    this.sessionPhase = phase;
-
     // Fetch open positions cache every 2 ticks (60s)
     const now = Date.now();
     if (now - this.lastPositionFetch > 60_000) {
@@ -630,6 +802,17 @@ class AgentController {
         logger.error({ err }, "Failed to fetch open positions");
       }
     }
+
+    // --- CLAUDE AUTONOMOUS MODE: bypass all DTR rules ---
+    if (this.claudeAutonomousMode) {
+      this.sessionPhase = "idle"; // phase not meaningful in this mode
+      await this.autonomousTick();
+      return;
+    }
+
+    // --- DTR RULES MODE ---
+    const phase = this.getCurrentPhase();
+    this.sessionPhase = phase;
 
     switch (phase) {
       case "london_range":

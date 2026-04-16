@@ -10,7 +10,7 @@ import {
   getGetInstrumentsQueryKey,
   getGetDailySummaryQueryKey,
 } from "@workspace/api-client-react";
-import { Play, Square, Activity, AlertCircle, KeyRound, LogOut, Brain, CheckCircle, XCircle } from "lucide-react";
+import { Play, Square, Activity, AlertCircle, KeyRound, LogOut, Brain, CheckCircle, XCircle, Cpu, BarChart2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -165,6 +165,21 @@ export function Dashboard() {
     },
   });
 
+  const setMode = useMutation({
+    mutationFn: async (claudeAutonomous: boolean) => {
+      const res = await fetch("/api/agent/mode", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ claudeAutonomous }),
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getGetAgentStatusQueryKey() });
+    },
+  });
+
   const handleStart = () => {
     startAgent.mutate(undefined, {
       onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetAgentStatusQueryKey() }),
@@ -212,7 +227,7 @@ export function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
           {/* Control Card */}
-          <Card className="lg:col-span-1 bg-card border-border rounded-md">
+          <Card className={`lg:col-span-1 border-border rounded-md ${agentStatus.claudeAutonomousMode ? "bg-primary/5 border-primary/40" : "bg-card"}`}>
             <CardHeader className="pb-4 border-b border-border/50 flex flex-row items-center justify-between">
               <CardTitle className="text-lg font-mono tracking-tight flex items-center">
                 <Activity className="w-5 h-5 mr-2 text-primary" />
@@ -256,6 +271,43 @@ export function Dashboard() {
                 </Button>
               </div>
 
+              {/* Trading Mode Selector */}
+              <div className="w-full border-t border-border pt-4 space-y-2">
+                <p className="text-[10px] font-mono uppercase text-muted-foreground tracking-widest mb-2">Trading Mode</p>
+                <div className="flex gap-2 w-full">
+                  <Button
+                    variant={!agentStatus.claudeAutonomousMode ? "default" : "outline"}
+                    size="sm"
+                    className={`flex-1 font-mono text-xs font-bold ${!agentStatus.claudeAutonomousMode ? "bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
+                    disabled={!isAuthenticated || setMode.isPending || !agentStatus.claudeAutonomousMode}
+                    onClick={() => setMode.mutate(false)}
+                  >
+                    <BarChart2 className="w-3 h-3 mr-1" />
+                    DTR RULES
+                  </Button>
+                  <Button
+                    variant={agentStatus.claudeAutonomousMode ? "default" : "outline"}
+                    size="sm"
+                    className={`flex-1 font-mono text-xs font-bold ${agentStatus.claudeAutonomousMode ? "bg-primary text-primary-foreground animate-pulse" : "border-primary/50 text-primary"}`}
+                    disabled={!isAuthenticated || setMode.isPending || agentStatus.claudeAutonomousMode}
+                    onClick={() => setMode.mutate(true)}
+                  >
+                    <Cpu className="w-3 h-3 mr-1" />
+                    CLAUDE AI
+                  </Button>
+                </div>
+                {agentStatus.claudeAutonomousMode && (
+                  <div className="text-[10px] font-mono text-primary/80 bg-primary/10 rounded px-2 py-1">
+                    ⚡ Claude trading autonomously — DTR rules bypassed
+                    {agentStatus.lastClaudeAutonomousTick && (
+                      <span className="block text-muted-foreground mt-0.5">
+                        Last tick: {new Date(agentStatus.lastClaudeAutonomousTick).toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Claude Trade Now */}
               <div className="w-full border-t border-border pt-4">
                 <Button
@@ -272,8 +324,8 @@ export function Dashboard() {
               
               <div className="w-full flex justify-between items-center border-t border-border pt-4">
                 <span className="text-xs font-mono text-muted-foreground uppercase tracking-wider block">Session Phase</span>
-                <span className="font-mono font-bold text-primary bg-primary/10 px-3 py-1 rounded inline-block">
-                  {formatSessionPhase(agentStatus.sessionPhase)}
+                <span className={`font-mono font-bold px-3 py-1 rounded inline-block ${agentStatus.claudeAutonomousMode ? "text-primary bg-primary/10" : "text-primary bg-primary/10"}`}>
+                  {agentStatus.claudeAutonomousMode ? "CLAUDE AI" : formatSessionPhase(agentStatus.sessionPhase)}
                 </span>
               </div>
 

@@ -269,4 +269,27 @@ router.post("/agent/claude-trade", requireAgentKeyOrSession, async (_req, res): 
   res.json(result);
 });
 
+// ---------------------------------------------------------------------------
+// GET  /api/agent/mode       — returns current trading mode
+// POST /api/agent/mode       — sets trading mode
+//   Body: { claudeAutonomous: boolean }
+// ---------------------------------------------------------------------------
+router.get("/agent/mode", (_req, res): void => {
+  res.json({
+    claudeAutonomousMode: agentController.getAutonomousMode(),
+  });
+});
+
+router.post("/agent/mode", requireAgentKeyOrSession, (req: Request, res: Response): void => {
+  const body = req.body as Record<string, unknown>;
+  const claudeAutonomous = body.claudeAutonomous;
+  if (typeof claudeAutonomous !== "boolean") {
+    res.status(400).json({ error: 'Body must include { "claudeAutonomous": true | false }' });
+    return;
+  }
+  const result = agentController.setAutonomousMode(claudeAutonomous);
+  logger.info({ claudeAutonomous }, "Trading mode set via API");
+  res.json({ ...result, claudeAutonomousMode: agentController.getAutonomousMode() });
+});
+
 export default router;

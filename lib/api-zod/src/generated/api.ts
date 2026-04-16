@@ -37,6 +37,8 @@ export const GetAgentStatusResponse = zod.object({
   lastUpdated: zod.string(),
   authenticatedWithProjectX: zod.boolean(),
   errorMessage: zod.string().nullable(),
+  claudeAutonomousMode: zod.boolean(),
+  lastClaudeAutonomousTick: zod.string().nullable(),
 });
 
 /**
