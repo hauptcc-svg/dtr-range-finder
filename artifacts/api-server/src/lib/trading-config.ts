@@ -41,9 +41,9 @@ export const TRADING_CONFIG: TradingConfig = {
   tradingDays: [0, 1, 2, 3, 4], // Monday–Friday
 
   instruments: {
-    MYMM26: {
-      symbol: "MYMM26",
-      name: "Mini Yen",
+    MYMM6: {
+      symbol: "MYMM6",
+      name: "Micro Dow (MYM)",
       enabled: true,
       qty: 2,
       tp1Qty: 1,
@@ -60,11 +60,11 @@ export const TRADING_CONFIG: TradingConfig = {
       tpMode: "Range Target",
       maxTradesPerDay: 4,
       maxLossesPerDirection: 2,
-      pointValue: 12.5,
-      minTick: 0.01,
+      pointValue: 0.5,
+      minTick: 1,
     },
-    MCLK26: {
-      symbol: "MCLK26",
+    MCLK6: {
+      symbol: "MCLK6",
       name: "Micro Crude Oil",
       enabled: true,
       qty: 2,
@@ -82,11 +82,11 @@ export const TRADING_CONFIG: TradingConfig = {
       tpMode: "Range Target",
       maxTradesPerDay: 4,
       maxLossesPerDirection: 2,
-      pointValue: 10.0,
+      pointValue: 1.0,
       minTick: 0.01,
     },
-    MGCM26: {
-      symbol: "MGCM26",
+    MGCM6: {
+      symbol: "MGCM6",
       name: "Micro Gold",
       enabled: true,
       qty: 2,
@@ -104,11 +104,11 @@ export const TRADING_CONFIG: TradingConfig = {
       tpMode: "Range Target",
       maxTradesPerDay: 4,
       maxLossesPerDirection: 2,
-      pointValue: 10.0,
+      pointValue: 1.0,
       minTick: 0.1,
     },
-    MNQM26: {
-      symbol: "MNQM26",
+    MNQM6: {
+      symbol: "MNQM6",
       name: "Micro NQ (Nasdaq 100)",
       enabled: true,
       qty: 3,
@@ -126,7 +126,7 @@ export const TRADING_CONFIG: TradingConfig = {
       tpMode: "Range Target",
       maxTradesPerDay: 4,
       maxLossesPerDirection: 2,
-      pointValue: 20.0,
+      pointValue: 0.5,
       minTick: 0.25,
     },
   },

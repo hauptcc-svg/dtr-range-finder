@@ -71,7 +71,7 @@ Respond with a JSON object in this exact format (no markdown, no explanation out
 {
   "decisions": [
     {
-      "symbol": "MYMM26",
+      "symbol": "MYMM6",
       "action": "long" | "short" | "skip",
       "reasoning": "brief reason"
     }
