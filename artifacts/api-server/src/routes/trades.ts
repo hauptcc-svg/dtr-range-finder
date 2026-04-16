@@ -54,6 +54,7 @@ router.get("/trades", async (req, res): Promise<void> => {
     stopPrice: t.stopPrice ?? null,
     tp1Price: t.tp1Price ?? null,
     tp2Price: t.tp2Price ?? null,
+    notes: t.notes ?? null,
   }));
 
   res.json(
@@ -64,6 +65,35 @@ router.get("/trades", async (req, res): Promise<void> => {
       pageSize: limit,
     })
   );
+});
+
+router.patch("/trades/:id/notes", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ success: false, message: "Invalid trade ID" });
+    return;
+  }
+
+  const body = req.body as Record<string, unknown>;
+  if (!("notes" in body) || (body.notes !== null && typeof body.notes !== "string")) {
+    res.status(400).json({ success: false, message: "Body must include { notes: string | null }" });
+    return;
+  }
+
+  const notes = body.notes as string | null;
+
+  const updated = await db
+    .update(tradesTable)
+    .set({ notes: notes ?? null })
+    .where(eq(tradesTable.id, id))
+    .returning({ id: tradesTable.id });
+
+  if (updated.length === 0) {
+    res.status(404).json({ success: false, message: `Trade ${id} not found` });
+    return;
+  }
+
+  res.json({ success: true, message: `Notes updated for trade ${id}` });
 });
 
 export default router;

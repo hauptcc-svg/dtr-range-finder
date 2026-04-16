@@ -15,4 +15,10 @@ export interface Position {
   currentPrice: number;
   unrealizedPnl: number;
   openedAt: string;
+  /** @nullable */
+  stopPrice: number | null;
+  /** @nullable */
+  tp1Price: number | null;
+  /** @nullable */
+  tp2Price: number | null;
 }

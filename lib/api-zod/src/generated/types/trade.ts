@@ -30,4 +30,6 @@ export interface Trade {
   tp1Price: number | null;
   /** @nullable */
   tp2Price: number | null;
+  /** @nullable */
+  notes: string | null;
 }

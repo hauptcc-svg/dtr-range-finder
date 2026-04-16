@@ -21,3 +21,4 @@ export * from "./tradeDirection";
 export * from "./tradeSession";
 export * from "./tradesPage";
 export * from "./tradeStatus";
+export * from "./updateTradeNotesBody";

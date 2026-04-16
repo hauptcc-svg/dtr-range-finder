@@ -37,8 +37,6 @@ export const GetAgentStatusResponse = zod.object({
   lastUpdated: zod.string(),
   authenticatedWithProjectX: zod.boolean(),
   errorMessage: zod.string().nullable(),
-  claudeAutonomousMode: zod.boolean(),
-  lastClaudeAutonomousTick: zod.string().nullable(),
 });
 
 /**
@@ -109,6 +107,7 @@ export const GetTradesResponse = zod.object({
       stopPrice: zod.number().nullable(),
       tp1Price: zod.number().nullable(),
       tp2Price: zod.number().nullable(),
+      notes: zod.string().nullable(),
     }),
   ),
   total: zod.number(),
@@ -127,8 +126,39 @@ export const GetPositionsResponseItem = zod.object({
   currentPrice: zod.number(),
   unrealizedPnl: zod.number(),
   openedAt: zod.string(),
+  stopPrice: zod.number().nullable(),
+  tp1Price: zod.number().nullable(),
+  tp2Price: zod.number().nullable(),
 });
 export const GetPositionsResponse = zod.array(GetPositionsResponseItem);
+
+/**
+ * @summary Manually close an open position
+ */
+export const ClosePositionParams = zod.object({
+  symbol: zod.coerce.string(),
+});
+
+export const ClosePositionResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string(),
+});
+
+/**
+ * @summary Update journal notes for a trade
+ */
+export const UpdateTradeNotesParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateTradeNotesBody = zod.object({
+  notes: zod.string().nullable(),
+});
+
+export const UpdateTradeNotesResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string(),
+});
 
 /**
  * @summary Get today's trading summary

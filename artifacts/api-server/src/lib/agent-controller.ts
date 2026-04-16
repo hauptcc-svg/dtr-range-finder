@@ -700,6 +700,32 @@ class AgentController {
     return this.getInstrumentStatuses();
   }
 
+  /**
+   * Manually close an open position for a given instrument symbol.
+   * Works whether or not the agent is running.
+   */
+  async closePositionForSymbol(symbol: string): Promise<{ success: boolean; message: string }> {
+    const state = this.instrumentStates.get(symbol);
+    if (!state) {
+      return { success: false, message: `Unknown instrument: ${symbol}` };
+    }
+    if (!state.contractId) {
+      return { success: false, message: `No contract ID resolved for ${symbol} — agent may not be running` };
+    }
+    if (!this.client) {
+      return { success: false, message: "Agent is not running — cannot close position" };
+    }
+    try {
+      await this.client.closePositionForContract(state.contractId);
+      logger.info({ symbol }, "Manual position close requested");
+      return { success: true, message: `Close order sent for ${symbol}` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err, symbol }, "Failed to manually close position");
+      return { success: false, message: `Failed to close ${symbol}: ${msg}` };
+    }
+  }
+
   private async resolveContractIds(): Promise<void> {
     if (!this.client) return;
     for (const symbol of Object.keys(TRADING_CONFIG.instruments)) {

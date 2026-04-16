@@ -33,9 +33,6 @@ export interface AgentStatus {
   authenticatedWithProjectX: boolean;
   /** @nullable */
   errorMessage: string | null;
-  claudeAutonomousMode: boolean;
-  /** @nullable */
-  lastClaudeAutonomousTick: string | null;
 }
 
 export interface InstrumentStatus {
@@ -108,6 +105,8 @@ export interface Trade {
   tp1Price: number | null;
   /** @nullable */
   tp2Price: number | null;
+  /** @nullable */
+  notes: string | null;
 }
 
 export interface TradesPage {
@@ -133,6 +132,12 @@ export interface Position {
   currentPrice: number;
   unrealizedPnl: number;
   openedAt: string;
+  /** @nullable */
+  stopPrice: number | null;
+  /** @nullable */
+  tp1Price: number | null;
+  /** @nullable */
+  tp2Price: number | null;
 }
 
 export type DailySummaryStatus =
@@ -173,4 +178,9 @@ export type GetTradesParams = {
    * @nullable
    */
   date?: string | null;
+};
+
+export type UpdateTradeNotesBody = {
+  /** @nullable */
+  notes: string | null;
 };

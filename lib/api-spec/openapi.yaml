@@ -136,6 +136,55 @@ paths:
                 items:
                   $ref: "#/components/schemas/Position"
 
+  /positions/{symbol}/close:
+    post:
+      operationId: closePosition
+      tags: [positions]
+      summary: Manually close an open position
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Position close result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentActionResult"
+
+  /trades/{id}/notes:
+    patch:
+      operationId: updateTradeNotes
+      tags: [trades]
+      summary: Update journal notes for a trade
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: ["string", "null"]
+              required:
+                - notes
+      responses:
+        "200":
+          description: Updated trade
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentActionResult"
+
   /agent/daily-summary:
     get:
       operationId: getDailySummary
@@ -274,6 +323,8 @@ components:
           type: ["number", "null"]
         tp2Price:
           type: ["number", "null"]
+        notes:
+          type: ["string", "null"]
       required:
         - id
         - instrument
@@ -289,6 +340,7 @@ components:
         - stopPrice
         - tp1Price
         - tp2Price
+        - notes
 
     TradesPage:
       type: object
@@ -327,6 +379,12 @@ components:
           type: number
         openedAt:
           type: string
+        stopPrice:
+          type: ["number", "null"]
+        tp1Price:
+          type: ["number", "null"]
+        tp2Price:
+          type: ["number", "null"]
       required:
         - instrument
         - direction
@@ -335,6 +393,9 @@ components:
         - currentPrice
         - unrealizedPnl
         - openedAt
+        - stopPrice
+        - tp1Price
+        - tp2Price
 
     DailySummary:
       type: object

@@ -25,10 +25,11 @@ import type {
   InstrumentStatus,
   Position,
   TradesPage,
+  UpdateTradeNotesBody,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -594,6 +595,177 @@ export function useGetPositions<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Manually close an open position
+ */
+export const getClosePositionUrl = (symbol: string) => {
+  return `/api/positions/${symbol}/close`;
+};
+
+export const closePosition = async (
+  symbol: string,
+  options?: RequestInit,
+): Promise<AgentActionResult> => {
+  return customFetch<AgentActionResult>(getClosePositionUrl(symbol), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getClosePositionMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof closePosition>>,
+    TError,
+    { symbol: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof closePosition>>,
+  TError,
+  { symbol: string },
+  TContext
+> => {
+  const mutationKey = ["closePosition"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof closePosition>>,
+    { symbol: string }
+  > = (props) => {
+    const { symbol } = props ?? {};
+
+    return closePosition(symbol, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ClosePositionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof closePosition>>
+>;
+
+export type ClosePositionMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Manually close an open position
+ */
+export const useClosePosition = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof closePosition>>,
+    TError,
+    { symbol: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof closePosition>>,
+  TError,
+  { symbol: string },
+  TContext
+> => {
+  return useMutation(getClosePositionMutationOptions(options));
+};
+
+/**
+ * @summary Update journal notes for a trade
+ */
+export const getUpdateTradeNotesUrl = (id: number) => {
+  return `/api/trades/${id}/notes`;
+};
+
+export const updateTradeNotes = async (
+  id: number,
+  updateTradeNotesBody: UpdateTradeNotesBody,
+  options?: RequestInit,
+): Promise<AgentActionResult> => {
+  return customFetch<AgentActionResult>(getUpdateTradeNotesUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateTradeNotesBody),
+  });
+};
+
+export const getUpdateTradeNotesMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateTradeNotes>>,
+    TError,
+    { id: number; data: BodyType<UpdateTradeNotesBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateTradeNotes>>,
+  TError,
+  { id: number; data: BodyType<UpdateTradeNotesBody> },
+  TContext
+> => {
+  const mutationKey = ["updateTradeNotes"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateTradeNotes>>,
+    { id: number; data: BodyType<UpdateTradeNotesBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateTradeNotes(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateTradeNotesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateTradeNotes>>
+>;
+export type UpdateTradeNotesMutationBody = BodyType<UpdateTradeNotesBody>;
+export type UpdateTradeNotesMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update journal notes for a trade
+ */
+export const useUpdateTradeNotes = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateTradeNotes>>,
+    TError,
+    { id: number; data: BodyType<UpdateTradeNotesBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateTradeNotes>>,
+  TError,
+  { id: number; data: BodyType<UpdateTradeNotesBody> },
+  TContext
+> => {
+  return useMutation(getUpdateTradeNotesMutationOptions(options));
+};
 
 /**
  * @summary Get today's trading summary
