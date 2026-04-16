@@ -658,8 +658,8 @@
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
             <div class="card-title" style="margin-bottom:0">📜 Trade History</div>
             <div style="display:flex;gap:8px">
-                <button class="btn-export btn-export-csv" onclick="exportTrades('csv')">⬇ CSV</button>
-                <button class="btn-export btn-export-xlsx" onclick="exportTrades('xlsx')">⬇ XLSX</button>
+                <button class="btn-export btn-export-csv" onclick="exportTrades('csv')">Export CSV</button>
+                <button class="btn-export btn-export-xlsx" onclick="exportTrades('xlsx')">Export XLSX</button>
             </div>
         </div>
         <div class="table-wrap">
@@ -979,7 +979,7 @@ async function loadTrades() {
         document.getElementById('btn-prev').disabled = tradesPage <= 1;
         document.getElementById('btn-next').disabled = tradesPage >= totalPages;
     } catch(e) {
-        document.getElementById('trades-tbody').innerHTML = '<tr><td colspan="10" class="empty-state">Error loading trades: ' + escHtml(e.message) + '</td></tr>';
+        document.getElementById('trades-tbody').innerHTML = '<tr><td colspan="11" class="empty-state">Error loading trades: ' + escHtml(e.message) + '</td></tr>';
     }
 }
 
@@ -1156,8 +1156,7 @@ function tradesToRows(trades) {
         SL: t.stopPrice ?? '',
         TP1: t.tp1Price ?? '',
         TP2: t.tp2Price ?? '',
-        PnL: t.pnl ?? '',
-        Status: (t.status || '').toUpperCase(),
+        'P&L': t.pnl ?? '',
         Notes: t.notes ?? '',
     }));
 }
