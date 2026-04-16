@@ -383,17 +383,19 @@
 
                 // Update P&L data
                 if (data.p_and_l) {
-                    document.getElementById('balance').textContent = 
-                        '$' + (data.p_and_l.balance / 1000).toFixed(0) + 'K';
-                    
+                    const bal = data.p_and_l.balance;
+                    document.getElementById('balance').textContent =
+                        (bal != null) ? '$' + (bal / 1000).toFixed(0) + 'K' : '--';
+
                     const dailyPnL = data.p_and_l.daily_pnl || 0;
                     const pnlElement = document.getElementById('daily-pnl');
                     pnlElement.textContent = (dailyPnL >= 0 ? '+' : '') + '$' + dailyPnL.toFixed(0);
                     pnlElement.className = 'data-value ' + (dailyPnL >= 0 ? 'positive' : 'negative');
-                    
-                    document.getElementById('positions').textContent = data.p_and_l.position_count || 0;
-                    document.getElementById('win-rate').textContent = 
-                        (data.p_and_l.win_rate * 100 || 0).toFixed(0) + '%';
+
+                    document.getElementById('positions').textContent = data.p_and_l.position_count ?? 0;
+                    const wr = data.p_and_l.win_rate;
+                    document.getElementById('win-rate').textContent =
+                        (wr != null) ? (wr * 100).toFixed(0) + '%' : '0%';
                 }
 
             } catch (e) {

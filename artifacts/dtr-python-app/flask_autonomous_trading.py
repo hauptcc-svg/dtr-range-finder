@@ -94,10 +94,32 @@ def _ts_post(path: str, data: dict = None, timeout: int = 10) -> dict:
         return {"error": str(e)}
 
 
+def _derive_mode(ts_status: dict) -> tuple:
+    """Derive (mode_str, is_running) from TypeScript status fields.
+
+    TypeScript agent/status returns:
+      running: bool
+      claudeAutonomousMode: bool
+    There is no "mode" string field — we compute it here.
+    """
+    is_running = ts_status.get("running", False)
+    claude_mode = ts_status.get("claudeAutonomousMode", False)
+    mode = "halted" if not is_running else ("claude" if claude_mode else "dtr")
+    return mode, is_running
+
+
 def _build_dashboard_payload(ts_status: dict) -> dict:
     """Translate TypeScript agent status into dashboard-compatible payload."""
-    mode_raw = ts_status.get("mode", "halted")
-    auto_exec = ts_status.get("isRunning", False)
+    mode_raw, auto_exec = _derive_mode(ts_status)
+
+    positions_resp = _ts_get("/positions")
+    position_count = len(positions_resp) if isinstance(positions_resp, list) else 0
+
+    summary_resp = _ts_get("/agent/daily-summary")
+    trade_count = summary_resp.get("tradeCount", ts_status.get("tradeCount", 0))
+    win_count = summary_resp.get("winCount", 0)
+    win_rate = (win_count / trade_count) if trade_count > 0 else 0
+
     return {
         "success": True,
         "timestamp": datetime.now().isoformat(),
@@ -115,10 +137,12 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
         },
         "position_limits": {**POSITION_LIMITS, "enforced": True},
         "p_and_l": {
+            "balance": None,
             "daily_pnl": ts_status.get("dailyPnl", 0),
             "daily_loss_hit": ts_status.get("dailyLossHit", False),
             "daily_profit_hit": ts_status.get("dailyProfitHit", False),
-            "open_positions": ts_status.get("openPositions", 0),
+            "position_count": position_count,
+            "win_rate": win_rate,
         },
         "refresh_note": "Dashboard auto-refreshes - no manual refresh needed",
     }
@@ -139,9 +163,12 @@ def dashboard():
 
 @app.route("/api/mode/dtr", methods=["POST"])
 def switch_to_dtr():
-    resp = _ts_post("/agent/mode", {"mode": "dtr"})
-    if "error" in resp:
-        return jsonify({"success": False, "error": resp["error"]}), 502
+    mode_resp = _ts_post("/agent/mode", {"claudeAutonomous": False})
+    if "error" in mode_resp:
+        return jsonify({"success": False, "error": mode_resp["error"]}), 502
+    start_resp = _ts_post("/agent/start")
+    if "error" in start_resp:
+        return jsonify({"success": False, "error": start_resp["error"]}), 502
     return jsonify({
         "success": True,
         "mode": "dtr",
@@ -155,9 +182,12 @@ def switch_to_dtr():
 
 @app.route("/api/mode/claude", methods=["POST"])
 def switch_to_claude():
-    resp = _ts_post("/agent/mode", {"mode": "claude"})
-    if "error" in resp:
-        return jsonify({"success": False, "error": resp["error"]}), 502
+    mode_resp = _ts_post("/agent/mode", {"claudeAutonomous": True})
+    if "error" in mode_resp:
+        return jsonify({"success": False, "error": mode_resp["error"]}), 502
+    start_resp = _ts_post("/agent/start")
+    if "error" in start_resp:
+        return jsonify({"success": False, "error": start_resp["error"]}), 502
     return jsonify({
         "success": True,
         "mode": "claude",
@@ -172,8 +202,9 @@ def switch_to_claude():
 
 @app.route("/api/mode/halt", methods=["POST"])
 def halt_trading():
-    _ts_post("/agent/mode", {"mode": "halted"})
-    _ts_post("/agent/stop")
+    resp = _ts_post("/agent/stop")
+    if "error" in resp:
+        return jsonify({"success": False, "error": resp["error"]}), 502
     return jsonify({
         "success": True,
         "mode": "halted",
@@ -189,10 +220,8 @@ def halt_trading():
 
 @app.route("/api/mode/status")
 def mode_status():
-    ts_mode = _ts_get("/agent/mode")
     ts_status = _ts_get("/agent/status")
-    mode = ts_mode.get("mode", "halted")
-    auto_exec = ts_status.get("isRunning", False)
+    mode, auto_exec = _derive_mode(ts_status)
     return jsonify({
         "success": True,
         "mode": mode,
@@ -206,7 +235,7 @@ def mode_status():
 @app.route("/api/orchestrator/status")
 def orchestrator_status():
     ts_status = _ts_get("/agent/status")
-    mode = ts_status.get("mode", "halted")
+    mode, auto_exec = _derive_mode(ts_status)
     label_map = {
         "halted":  "HALTED - No trading",
         "dtr":     "DTR AUTO - Running (30s checks) - Position limits ENFORCED",
@@ -216,7 +245,7 @@ def orchestrator_status():
         "success": True,
         "status": ts_status,
         "human_readable": label_map.get(mode, mode),
-        "auto_execution_active": ts_status.get("isRunning", False),
+        "auto_execution_active": auto_exec,
         "position_limits_enforced": True,
         "loss_limit": -200,
         "profit_limit": 1400,
