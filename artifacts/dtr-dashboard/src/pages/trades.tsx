@@ -239,7 +239,7 @@ export function Trades() {
                           </span>
                         </TableCell>
                         <TableCell className="text-center">
-                          {trade.status !== "open" && (
+                          {trade.status === "closed" && (
                             <Button
                               variant="ghost"
                               size="sm"
