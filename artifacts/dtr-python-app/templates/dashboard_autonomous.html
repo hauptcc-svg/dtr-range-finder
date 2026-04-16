@@ -679,6 +679,7 @@
     <button class="tab" onclick="showTab('positions', this)">Positions</button>
     <button class="tab" onclick="showTab('trades', this)">Trade History</button>
     <button class="tab" onclick="showTab('pairs', this)">⚙ Pairs</button>
+    <button class="tab" onclick="showTab('accounts', this)">🏦 Accounts</button>
 </div>
 
 <!-- ═══════════════════════════════════════
@@ -947,6 +948,63 @@
     </div>
 </div>
 
+<!-- ═══════════════════════════════════════
+     TAB 5: ACCOUNTS
+═══════════════════════════════════════ -->
+<div id="tab-accounts" class="page">
+    <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div class="card-title" style="margin-bottom:0">🏦 Account Management</div>
+            <button class="btn-add-pair" onclick="openAccountModal()">+ Add Account</button>
+        </div>
+        <div id="acct-feedback" style="min-height:18px;font-size:11px;margin-bottom:8px"></div>
+        <div class="table-wrap">
+            <table id="accounts-table">
+                <thead>
+                    <tr>
+                        <th>Account ID</th>
+                        <th>Account Number</th>
+                        <th>Label</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="accounts-tbody">
+                    <tr><td colspan="5" class="empty-state">Loading accounts…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="info-box" style="font-size:11px">
+        <strong>Note:</strong> Activating an account will flatten all open positions on the current account before switching. Daily P&amp;L counters reset on switch.
+    </div>
+</div>
+
+<!-- ═══════ Account Modal ═══════ -->
+<div class="modal-overlay" id="account-modal">
+    <div class="pair-modal">
+        <div class="pair-modal-title">Add Account</div>
+        <div class="pair-form-grid">
+            <div class="pair-field">
+                <label>Account ID (numeric) *</label>
+                <input id="af-id" type="number" min="1" step="1" placeholder="e.g. 20936179">
+            </div>
+            <div class="pair-field">
+                <label>Account Number *</label>
+                <input id="af-number" type="text" placeholder="e.g. 50KTC-V2-123456-78901234" maxlength="80">
+            </div>
+            <div class="pair-field full">
+                <label>Label (optional)</label>
+                <input id="af-label" type="text" placeholder="e.g. 50K Combine Attempt 2" maxlength="80">
+            </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:18px;justify-content:flex-end">
+            <button class="btn-pair-cancel" onclick="closeAccountModal()">Cancel</button>
+            <button class="btn-pair-save" id="btn-acct-save" onclick="saveAccount()">Save</button>
+        </div>
+    </div>
+</div>
+
 <!-- ═══════ Pairs Modal ═══════ -->
 <div class="modal-overlay" id="pair-modal">
     <div class="pair-modal">
@@ -1029,6 +1087,7 @@ function showTab(name, btn) {
     if (name === 'positions') loadPositions();
     if (name === 'trades') loadTrades();
     if (name === 'pairs') loadPairs();
+    if (name === 'accounts') loadAccounts();
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -1758,10 +1817,124 @@ async function lockTrading() {
     }
 }
 
+// ─── Accounts Tab ─────────────────────────────────────────────────────────────
+
+function setAcctFeedback(msg, isErr) {
+    const el = document.getElementById('acct-feedback');
+    el.textContent = msg;
+    el.style.color = isErr ? '#ef4444' : '#10b981';
+    if (!isErr && msg) {
+        setTimeout(() => { if (el.textContent === msg) { el.textContent = ''; } }, 5000);
+    }
+}
+
+function renderAccounts(rows) {
+    const tbody = document.getElementById('accounts-tbody');
+    if (!rows || rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No accounts registered.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = rows.map(a => {
+        const isActive = a.isActive;
+        const statusBadge = isActive
+            ? '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:bold;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.35)">● ACTIVE</span>'
+            : '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:bold;background:rgba(100,100,100,0.15);color:#666;border:1px solid rgba(100,100,100,0.35)">INACTIVE</span>';
+        const activateBtn = isActive
+            ? ''
+            : `<button class="btn-edit-pair" style="margin-right:6px" onclick="activateAccount(${a.id})">ACTIVATE</button>`;
+        const deleteBtn = isActive
+            ? ''
+            : `<button class="btn-del-pair" onclick="deleteAccount(${a.id})">REMOVE</button>`;
+        return `<tr>
+            <td><code style="font-size:11px">${a.accountId}</code></td>
+            <td style="font-size:11px">${a.accountNumber ?? '—'}</td>
+            <td style="font-size:11px;color:#aaa">${a.label ?? '—'}</td>
+            <td>${statusBadge}</td>
+            <td>${activateBtn}${deleteBtn}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadAccounts() {
+    try {
+        const rows = await apiFetch('/api/account-configs');
+        renderAccounts(rows);
+    } catch(e) {
+        document.getElementById('accounts-tbody').innerHTML = '<tr><td colspan="5" class="empty-state">Error loading accounts.</td></tr>';
+    }
+}
+
+function openAccountModal() {
+    document.getElementById('af-id').value = '';
+    document.getElementById('af-number').value = '';
+    document.getElementById('af-label').value = '';
+    document.getElementById('account-modal').classList.add('active');
+}
+
+function closeAccountModal() {
+    document.getElementById('account-modal').classList.remove('active');
+}
+
+async function saveAccount() {
+    const accountId = parseInt(document.getElementById('af-id').value, 10);
+    const accountNumber = document.getElementById('af-number').value.trim();
+    const label = document.getElementById('af-label').value.trim();
+    if (!accountId || isNaN(accountId) || !accountNumber) {
+        setAcctFeedback('Account ID and Account Number are required.', true);
+        return;
+    }
+    const btn = document.getElementById('btn-acct-save');
+    btn.disabled = true;
+    try {
+        await apiFetch('/api/account-configs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accountId, accountNumber, label: label || null }),
+        });
+        closeAccountModal();
+        setAcctFeedback('Account registered.', false);
+        await loadAccounts();
+    } catch(e) {
+        setAcctFeedback('Save failed: ' + e.message, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function activateAccount(rowId) {
+    if (!confirm('Switch to this account? Open positions on the current account will be flattened first.')) return;
+    setAcctFeedback('Switching account…', false);
+    try {
+        const data = await apiFetch('/api/account-configs/' + rowId + '/activate', { method: 'POST' });
+        if (data.success === false) throw new Error(data.message || 'Activate failed');
+        setAcctFeedback(data.message || 'Account activated.', false);
+        renderAccounts(data.accounts);
+    } catch(e) {
+        setAcctFeedback('❌ ' + e.message, true);
+    }
+}
+
+async function deleteAccount(rowId) {
+    if (!confirm('Remove this account from the list? (It must be inactive first.)')) return;
+    setAcctFeedback('Removing account…', false);
+    try {
+        await apiFetch('/api/account-configs/' + rowId, { method: 'DELETE' });
+        setAcctFeedback('Account removed.', false);
+        await loadAccounts();
+    } catch(e) {
+        setAcctFeedback('❌ ' + e.message, true);
+    }
+}
+
+document.getElementById('account-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeAccountModal();
+});
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 updateDashboard();
 updateInstruments();
 loadRiskSettings();
+loadAccounts();
 startPolling();
 </script>
 </body>

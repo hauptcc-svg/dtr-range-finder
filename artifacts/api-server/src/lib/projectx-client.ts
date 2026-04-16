@@ -89,6 +89,12 @@ export class ProjectXClient {
     return data as T;
   }
 
+  /** Update the account ID used for all subsequent API calls. */
+  setAccountId(accountId: number): void {
+    this.accountId = accountId;
+    logger.info({ accountId }, "ProjectXClient: accountId updated");
+  }
+
   async authenticate(): Promise<void> {
     logger.info({ username: this.username }, "Authenticating with ProjectX");
     const response = await this.request<{ token: string; errorCode: number; errorMessage: string }>(

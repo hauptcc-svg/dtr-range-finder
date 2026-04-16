@@ -1,4 +1,4 @@
-import { pgTable, serial, text, real, integer, timestamp, date, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, real, integer, timestamp, date, boolean, varchar } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -61,3 +61,16 @@ export const instrumentConfigsTable = pgTable("instrument_configs", {
 export const insertInstrumentConfigSchema = createInsertSchema(instrumentConfigsTable);
 export type InsertInstrumentConfig = z.infer<typeof insertInstrumentConfigSchema>;
 export type InstrumentConfig = typeof instrumentConfigsTable.$inferSelect;
+
+export const accountConfigsTable = pgTable("account_configs", {
+  id: serial("id").primaryKey(),
+  accountId: integer("account_id").notNull().unique(),
+  accountNumber: varchar("account_number", { length: 100 }).notNull(),
+  label: varchar("label", { length: 100 }),
+  isActive: boolean("is_active").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertAccountConfigSchema = createInsertSchema(accountConfigsTable).omit({ id: true, createdAt: true });
+export type InsertAccountConfig = z.infer<typeof insertAccountConfigSchema>;
+export type AccountConfig = typeof accountConfigsTable.$inferSelect;

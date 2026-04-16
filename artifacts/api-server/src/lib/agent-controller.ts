@@ -20,7 +20,7 @@ import {
 } from "./dtr-strategy";
 import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, type ClaudeAdvice } from "./claude-advisor";
 import { checkAtrPullbackSignal, DEFAULT_ATR_PULLBACK_PARAMS } from "./atr-pullback-strategy";
-import { db, tradesTable, dailySummaryTable, instrumentConfigsTable } from "@workspace/db";
+import { db, tradesTable, dailySummaryTable, instrumentConfigsTable, accountConfigsTable } from "@workspace/db";
 import type { InstrumentConfig as DbInstrumentConfigRow } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 
@@ -420,6 +420,94 @@ class AgentController {
       `<i>${new Date().toUTCString()}</i>`
     ).catch(() => {});
     return { success: true, message: "Trading locked for the session. Restart the agent to unlock." };
+  }
+
+  /**
+   * Switch the active trading account.
+   * 1. Flattens all open positions on the current account.
+   * 2. Updates the ProjectXClient's accountId.
+   * 3. Resets all daily counters and instrument states.
+   * 4. Validates the new account can trade.
+   */
+  async switchAccount(newAccountId: number): Promise<{ success: boolean; message: string }> {
+    if (!this.client) {
+      return { success: false, message: "Agent is not running — start it first before switching accounts." };
+    }
+    if (newAccountId === this.cachedAccountInfo?.accountId) {
+      return { success: false, message: "That account is already active." };
+    }
+
+    logger.warn({ newAccountId }, "Account switch requested — flattening positions on current account");
+
+    // 1. Flatten all open positions on the current account
+    try {
+      await this.flattenAllPositions("ended");
+    } catch (err) {
+      logger.error({ err }, "Failed to flatten positions before account switch");
+      return { success: false, message: "Could not flatten positions on the current account." };
+    }
+
+    // 2. Update the ProjectXClient with the new account ID
+    this.client.setAccountId(newAccountId);
+
+    // 3. Reset daily counters and instrument states
+    this.dailyPnl = 0;
+    this.tradeCount = 0;
+    this.sessionPhase = "idle";
+    this.runtimeSettings.tradingLocked = false;
+    for (const symbol of Array.from(this.instrumentStates.keys())) {
+      this.instrumentStates.set(symbol, {
+        ...createInstrumentState(symbol),
+        contractId: this.instrumentStates.get(symbol)?.contractId ?? null,
+      });
+    }
+
+    // 4. Validate the new account
+    try {
+      const info = await this.client.getAccountInfo();
+      if (!info.canTrade) {
+        return { success: false, message: `Account ${newAccountId} exists but canTrade=false.` };
+      }
+      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: info.canTrade };
+      logger.info({ accountId: newAccountId, accountName: info.name, balance: info.balance }, "Account switched successfully");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: `Account validation failed: ${msg}` };
+    }
+
+    this.sendTelegram(
+      `🔄 <b>ACCOUNT SWITCHED</b> · DeclanCapital FX\n\n` +
+      `<b>Active Account:</b> ${this.cachedAccountInfo?.accountName ?? newAccountId}\n` +
+      `<b>Balance:</b> $${this.cachedAccountInfo?.balance?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? "—"}\n` +
+      `<i>${new Date().toUTCString()}</i>`
+    ).catch(() => {});
+
+    return { success: true, message: `Account switched to ${this.cachedAccountInfo?.accountName ?? newAccountId}` };
+  }
+
+  /**
+   * Seed account_configs from PROJECTX_ACCOUNT_ID env var on first run.
+   * Called during start() — skipped if the table already has rows.
+   */
+  async seedAccountConfigs(): Promise<void> {
+    const existing = await db.select().from(accountConfigsTable);
+    if (existing.length > 0) {
+      logger.info({ count: existing.length }, "DB already has account configs — skipping seed");
+      return;
+    }
+    const envAccountId = parseInt(process.env.PROJECTX_ACCOUNT_ID ?? "0", 10);
+    if (!envAccountId) {
+      logger.warn("PROJECTX_ACCOUNT_ID not set — cannot seed account_configs");
+      return;
+    }
+    const accountName = this.cachedAccountInfo?.accountName ?? String(envAccountId);
+    await db.insert(accountConfigsTable).values({
+      accountId: envAccountId,
+      accountNumber: accountName,
+      label: "Default Account",
+      isActive: true,
+    });
+    logger.info({ envAccountId, accountName }, "Seeded account_configs from env var (first run)");
   }
 
   /**
@@ -913,6 +1001,17 @@ class AgentController {
 
     // Load or create today's summary
     await this.loadDailySummary();
+
+    // Cache account info early so seedAccountConfigs can use the name
+    try {
+      const info = await this.client!.getAccountInfo();
+      this.cachedAccountInfo = { balance: info.balance, accountId: info.id, accountName: info.name, canTrade: info.canTrade };
+    } catch (err) {
+      logger.warn({ err }, "Could not pre-cache account info before seeding");
+    }
+
+    // Seed account_configs table on first run
+    await this.seedAccountConfigs();
 
     // Seed DB with static instruments if first run, then load from DB
     await this.seedInstrumentConfigs();

@@ -378,6 +378,40 @@ def claude_analyse():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# ACCOUNT CONFIGS  (proxy to TypeScript API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/account-configs", methods=["GET"])
+def list_account_configs():
+    body, status = _ts_request("GET", "/account-configs")
+    return jsonify(body), status
+
+
+@app.route("/api/account-configs", methods=["POST"])
+def create_account_config():
+    body, status = _ts_request("POST", "/account-configs", data=request.json or {})
+    return jsonify(body), status
+
+
+@app.route("/api/account-configs/<int:row_id>", methods=["PATCH"])
+def patch_account_config(row_id: int):
+    body, status = _ts_request("PATCH", f"/account-configs/{row_id}", data=request.json or {})
+    return jsonify(body), status
+
+
+@app.route("/api/account-configs/<int:row_id>", methods=["DELETE"])
+def delete_account_config(row_id: int):
+    body, status = _ts_request("DELETE", f"/account-configs/{row_id}")
+    return jsonify(body), status
+
+
+@app.route("/api/account-configs/<int:row_id>/activate", methods=["POST"])
+def activate_account_config(row_id: int):
+    body, status = _ts_request("POST", f"/account-configs/{row_id}/activate")
+    return jsonify(body), status
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # RISK CONTROLS  (proxy to TypeScript API)
 # ═══════════════════════════════════════════════════════════════════════════
 
