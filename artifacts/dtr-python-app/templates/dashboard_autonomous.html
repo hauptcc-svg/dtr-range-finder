@@ -1,3 +1,4 @@
+<!-- built: {{ build_ts }} -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1025,7 +1026,7 @@
     <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
             <div class="card-title" style="margin-bottom:0">🏦 Account Management</div>
-            <button class="btn-add-pair" id="btn-toggle-acct-form" onclick="openAccountForm()">+ Add Account</button>
+            <button class="btn-add-pair" id="btn-toggle-acct-form" onclick="toggleAccountForm()">+ Add Account</button>
         </div>
 
         <!-- Inline add-account form (hidden by default) -->
@@ -2027,6 +2028,15 @@ function openAccountForm() {
 function closeAccountForm() {
     document.getElementById('account-add-form').style.display = 'none';
     document.getElementById('btn-toggle-acct-form').textContent = '+ Add Account';
+}
+
+function toggleAccountForm() {
+    const form = document.getElementById('account-add-form');
+    if (form.style.display === 'none' || form.style.display === '') {
+        openAccountForm();
+    } else {
+        closeAccountForm();
+    }
 }
 
 function setModalFeedback(msg, isErr) {
