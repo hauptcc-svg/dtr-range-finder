@@ -348,6 +348,26 @@ components:
         - tp2Price
         - notes
 
+    TradeStats:
+      type: object
+      properties:
+        totalClosed:
+          type: integer
+        winCount:
+          type: integer
+        lossCount:
+          type: integer
+        totalWinPnl:
+          type: number
+        totalLossPnl:
+          type: number
+      required:
+        - totalClosed
+        - winCount
+        - lossCount
+        - totalWinPnl
+        - totalLossPnl
+
     TradesPage:
       type: object
       properties:
@@ -361,11 +381,14 @@ components:
           type: integer
         pageSize:
           type: integer
+        stats:
+          $ref: "#/components/schemas/TradeStats"
       required:
         - trades
         - total
         - page
         - pageSize
+        - stats
 
     Position:
       type: object

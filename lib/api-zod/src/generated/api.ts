@@ -115,6 +115,13 @@ export const GetTradesResponse = zod.object({
   total: zod.number(),
   page: zod.number(),
   pageSize: zod.number(),
+  stats: zod.object({
+    totalClosed: zod.number(),
+    winCount: zod.number(),
+    lossCount: zod.number(),
+    totalWinPnl: zod.number(),
+    totalLossPnl: zod.number(),
+  }),
 });
 
 /**

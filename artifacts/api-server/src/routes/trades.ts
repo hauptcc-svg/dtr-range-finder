@@ -27,7 +27,8 @@ router.get("/trades", async (req, res): Promise<void> => {
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-  const [trades, totalResult] = await Promise.all([
+  // Stats are always computed over ALL closed trades (ignoring pagination / date filter)
+  const [trades, totalResult, statsResult] = await Promise.all([
     db
       .select()
       .from(tradesTable)
@@ -36,9 +37,28 @@ router.get("/trades", async (req, res): Promise<void> => {
       .limit(limit)
       .offset(offset),
     db.select({ total: count() }).from(tradesTable).where(whereClause),
+    db
+      .select({
+        totalClosed: count(),
+        winCount: sql<number>`count(*) filter (where pnl > 0)`,
+        lossCount: sql<number>`count(*) filter (where pnl < 0)`,
+        totalWinPnl: sql<number>`coalesce(sum(pnl) filter (where pnl > 0), 0)`,
+        totalLossPnl: sql<number>`coalesce(sum(pnl) filter (where pnl < 0), 0)`,
+      })
+      .from(tradesTable)
+      .where(eq(tradesTable.status, "closed")),
   ]);
 
   const total = totalResult[0]?.total ?? 0;
+
+  const statsRow = statsResult[0];
+  const stats = {
+    totalClosed: Number(statsRow?.totalClosed ?? 0),
+    winCount: Number(statsRow?.winCount ?? 0),
+    lossCount: Number(statsRow?.lossCount ?? 0),
+    totalWinPnl: Number(statsRow?.totalWinPnl ?? 0),
+    totalLossPnl: Number(statsRow?.totalLossPnl ?? 0),
+  };
 
   const serialized = trades.map((t) => ({
     id: t.id,
@@ -64,6 +84,7 @@ router.get("/trades", async (req, res): Promise<void> => {
       total,
       page: page ?? 1,
       pageSize: limit,
+      stats,
     })
   );
 });

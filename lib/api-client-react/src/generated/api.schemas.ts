@@ -112,11 +112,20 @@ export interface Trade {
   notes: string | null;
 }
 
+export interface TradeStats {
+  totalClosed: number;
+  winCount: number;
+  lossCount: number;
+  totalWinPnl: number;
+  totalLossPnl: number;
+}
+
 export interface TradesPage {
   trades: Trade[];
   total: number;
   page: number;
   pageSize: number;
+  stats: TradeStats;
 }
 
 export type PositionDirection =

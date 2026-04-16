@@ -18,18 +18,6 @@ import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, BookOpen, StickyNote } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
-function computeStats(trades: Trade[]) {
-  const closed = trades.filter((t) => t.status === "closed" && t.pnl != null);
-  const wins = closed.filter((t) => (t.pnl ?? 0) > 0);
-  const losses = closed.filter((t) => (t.pnl ?? 0) < 0);
-  const winRate = closed.length > 0 ? (wins.length / closed.length) * 100 : null;
-  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + (t.pnl ?? 0), 0) / wins.length : null;
-  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0) / losses.length) : null;
-  const grossProfit = wins.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  const grossLoss = Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0));
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : null;
-  return { total: closed.length, winRate, avgWin, avgLoss, profitFactor };
-}
 
 interface JournalPanelProps {
   trade: Trade;
@@ -142,20 +130,32 @@ export function Trades() {
     { query: { queryKey: getGetTradesQueryKey({ page, pageSize }), refetchInterval: 5000 } }
   );
 
-  const stats = data ? computeStats(data.trades) : null;
+  const serverStats = data?.stats ?? null;
+  const winRate = serverStats && serverStats.totalClosed > 0
+    ? (serverStats.winCount / serverStats.totalClosed) * 100
+    : null;
+  const avgWin = serverStats && serverStats.winCount > 0
+    ? serverStats.totalWinPnl / serverStats.winCount
+    : null;
+  const avgLoss = serverStats && serverStats.lossCount > 0
+    ? Math.abs(serverStats.totalLossPnl) / serverStats.lossCount
+    : null;
+  const profitFactor = serverStats && serverStats.totalLossPnl < 0
+    ? serverStats.totalWinPnl / Math.abs(serverStats.totalLossPnl)
+    : null;
 
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-mono font-bold tracking-tight mb-4 border-b border-border/50 pb-2">TRADE HISTORY</h1>
 
-      {stats && stats.total > 0 && (
+      {serverStats && serverStats.totalClosed > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {[
-            { label: "CLOSED TRADES", value: stats.total.toString(), pos: false, neg: false },
-            { label: "WIN RATE", value: stats.winRate != null ? `${stats.winRate.toFixed(1)}%` : "—", pos: false, neg: false },
-            { label: "AVG WIN", value: stats.avgWin != null ? formatCurrency(stats.avgWin) : "—", pos: true, neg: false },
-            { label: "AVG LOSS", value: stats.avgLoss != null ? formatCurrency(-stats.avgLoss) : "—", pos: false, neg: true },
-            { label: "PROFIT FACTOR", value: stats.profitFactor != null ? stats.profitFactor.toFixed(2) : "—", pos: false, neg: false },
+            { label: "CLOSED TRADES", value: serverStats.totalClosed.toString(), pos: false, neg: false },
+            { label: "WIN RATE", value: winRate != null ? `${winRate.toFixed(1)}%` : "—", pos: false, neg: false },
+            { label: "AVG WIN", value: avgWin != null ? formatCurrency(avgWin) : "—", pos: true, neg: false },
+            { label: "AVG LOSS", value: avgLoss != null ? formatCurrency(-avgLoss) : "—", pos: false, neg: true },
+            { label: "PROFIT FACTOR", value: profitFactor != null ? profitFactor.toFixed(2) : "—", pos: false, neg: false },
           ].map(({ label, value, pos, neg }) => (
             <Card key={label} className="bg-card border-border shadow-none rounded-md">
               <CardContent className="p-3">
@@ -239,22 +239,24 @@ export function Trades() {
                           </span>
                         </TableCell>
                         <TableCell className="text-center">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setJournalTrade(trade)}
-                            className={cn(
-                              "h-7 w-7 p-0",
-                              trade.notes ? "text-primary" : "text-muted-foreground hover:text-foreground"
-                            )}
-                            title={trade.notes ? "View/edit notes" : "Add journal note"}
-                          >
-                            {trade.notes ? (
-                              <StickyNote className="h-3.5 w-3.5" />
-                            ) : (
-                              <BookOpen className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
+                          {trade.status !== "open" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setJournalTrade(trade)}
+                              className={cn(
+                                "h-7 w-7 p-0",
+                                trade.notes ? "text-primary" : "text-muted-foreground hover:text-foreground"
+                              )}
+                              title={trade.notes ? "View/edit notes" : "Add journal note"}
+                            >
+                              {trade.notes ? (
+                                <StickyNote className="h-3.5 w-3.5" />
+                              ) : (
+                                <BookOpen className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                       {trade.notes && (

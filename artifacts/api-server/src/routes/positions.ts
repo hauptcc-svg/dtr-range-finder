@@ -56,7 +56,7 @@ router.get("/positions", async (req, res): Promise<void> => {
 });
 
 router.post("/positions/:symbol/close", requireAgentKeyOrSession, async (req, res): Promise<void> => {
-  const symbol = req.params["symbol"] as string;
+  const symbol = (req.params["symbol"] as string).toUpperCase();
   const result = await agentController.closePositionForSymbol(symbol);
   res.json(result);
 });
