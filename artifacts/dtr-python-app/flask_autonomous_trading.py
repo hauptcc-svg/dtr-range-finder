@@ -99,21 +99,6 @@ def _ts_post(path: str, data: dict = None, timeout: int = 30) -> dict:
         return {"error": str(e)}
 
 
-def _ts_patch(path: str, data: dict = None, timeout: int = 10) -> dict:
-    """PATCH to the TypeScript API. All routes are mounted under /api."""
-    try:
-        r = requests.patch(
-            f"{TS_API}/api{path}",
-            json=data or {},
-            headers=_agent_headers(),
-            timeout=timeout,
-        )
-        return r.json()
-    except Exception as e:
-        logger.error(f"TS API PATCH /api{path} failed: {e}")
-        return {"error": str(e)}
-
-
 def _derive_mode(ts_status: dict) -> tuple:
     """Derive (mode_str, is_running) from TypeScript status fields.
 
