@@ -576,7 +576,7 @@ class AgentController {
             logger.warn({ err, symbol: state.symbol }, "Failed to fetch bars for autonomous tick");
           }
         }
-        return { state, config, recentBars };
+        return { state, config, recentBars, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
       })
     );
 
@@ -715,6 +715,8 @@ class AgentController {
       .map(([symbol, state]) => ({
         state,
         config: this.getEffectiveConfig(symbol),
+        effectiveMaxTrades: this.effectiveMaxTrades(symbol),
+        effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(symbol),
       }))
       .filter(({ config }) => !!config);
 
@@ -744,7 +746,7 @@ class AgentController {
               // non-fatal
             }
           }
-          return { state, config, recentBars };
+          return { state, config, recentBars, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
         })
       );
 

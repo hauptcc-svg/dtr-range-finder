@@ -37,10 +37,10 @@ export interface BarSnapshot {
 // DTR-Assist mode — requires range data, honours DTR constraints
 // ---------------------------------------------------------------------------
 function buildDTRPrompt(
-  instruments: Array<{ state: InstrumentState; config: InstrumentConfig }>
+  instruments: Array<{ state: InstrumentState; config: InstrumentConfig; effectiveMaxTrades: number; effectiveMaxLossesPerDirection: number }>
 ): string {
   const instrumentBlocks = instruments
-    .map(({ state, config }) => {
+    .map(({ state, config, effectiveMaxTrades, effectiveMaxLossesPerDirection }) => {
       const r = state.rangeData;
       return [
         `Instrument: ${state.symbol} (${config.name})`,
@@ -50,9 +50,9 @@ function buildDTRPrompt(
         `  Range Midpoint: ${r?.midpoint ?? "not set"}`,
         `  Bias: ${r?.bias ?? "unknown"}`,
         `  In Position: ${state.inPosition ? `YES (${state.positionDirection})` : "No"}`,
-        `  Trades Today: ${state.todayTrades} / ${config.maxTradesPerDay}`,
-        `  Long Losses Today: ${state.longLosses} / ${config.maxLossesPerDirection}`,
-        `  Short Losses Today: ${state.shortLosses} / ${config.maxLossesPerDirection}`,
+        `  Trades Today: ${state.todayTrades} / ${effectiveMaxTrades}`,
+        `  Long Losses Today: ${state.longLosses} / ${effectiveMaxLossesPerDirection}`,
+        `  Short Losses Today: ${state.shortLosses} / ${effectiveMaxLossesPerDirection}`,
         `  Point Value: $${config.pointValue}`,
         `  Min Tick: ${config.minTick}`,
       ].join("\n");
@@ -112,6 +112,8 @@ function buildAutonomousPrompt(
     state: InstrumentState;
     config: InstrumentConfig;
     recentBars: BarSnapshot[];
+    effectiveMaxTrades: number;
+    effectiveMaxLossesPerDirection: number;
   }>,
   dailyPnl: number,
   dailyLossLimit: number,
@@ -120,7 +122,7 @@ function buildAutonomousPrompt(
   const remainingBudget = dailyLossLimit + dailyPnl;
 
   const instrumentBlocks = instruments
-    .map(({ state, config, recentBars }) => {
+    .map(({ state, config, recentBars, effectiveMaxTrades, effectiveMaxLossesPerDirection }) => {
       const last30 = recentBars.slice(-30);
 
       const barsText =
@@ -165,7 +167,9 @@ function buildAutonomousPrompt(
         `--- ${state.symbol} (${config.name}) ---`,
         `Current Price : ${state.lastPrice ?? "unknown"}`,
         `Open Position : ${positionText}`,
-        `Trades Today  : ${state.todayTrades} / ${config.maxTradesPerDay}`,
+        `Trades Today  : ${state.todayTrades} / ${effectiveMaxTrades}`,
+        `Long Losses   : ${state.longLosses} / ${effectiveMaxLossesPerDirection}`,
+        `Short Losses  : ${state.shortLosses} / ${effectiveMaxLossesPerDirection}`,
         `Tick / Point  : ${config.minTick} tick | $${config.pointValue}/pt`,
         `Stats         : ${statsText}`,
         `Recent 1-min bars (oldest → newest):`,
@@ -261,7 +265,7 @@ async function callClaude(prompt: string): Promise<ClaudeAdvice> {
 }
 
 export async function getClaudeTradeAdvice(
-  instruments: Array<{ state: InstrumentState; config: InstrumentConfig }>
+  instruments: Array<{ state: InstrumentState; config: InstrumentConfig; effectiveMaxTrades: number; effectiveMaxLossesPerDirection: number }>
 ): Promise<ClaudeAdvice> {
   const prompt = buildDTRPrompt(instruments);
   return callClaude(prompt);
@@ -272,6 +276,8 @@ export async function getClaudeAutonomousAdvice(
     state: InstrumentState;
     config: InstrumentConfig;
     recentBars: BarSnapshot[];
+    effectiveMaxTrades: number;
+    effectiveMaxLossesPerDirection: number;
   }>,
   dailyPnl: number,
   dailyLossLimit: number,
