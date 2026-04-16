@@ -228,20 +228,40 @@ router.get("/agent/settings", (_req, res): void => {
 
 router.post("/agent/settings", requireAgentKeyOrSession, (req: Request, res: Response): void => {
   const body = req.body as Record<string, unknown>;
-  const partial: { dailyLossLimit?: number; dailyProfitTarget?: number; maxTradesPerDay?: number | null } = {};
+  const partial: {
+    dailyLossLimit?: number;
+    dailyProfitTarget?: number;
+    maxTradesPerDay?: number | null;
+    maxLossesPerDirection?: number | null;
+  } = {};
 
   if (body.dailyLossLimit !== undefined) {
     const v = Number(body.dailyLossLimit);
-    if (isNaN(v)) { res.status(400).json({ error: "dailyLossLimit must be a number" }); return; }
+    if (!Number.isFinite(v) || v <= 0) { res.status(400).json({ error: "dailyLossLimit must be a positive number" }); return; }
     partial.dailyLossLimit = v;
   }
   if (body.dailyProfitTarget !== undefined) {
     const v = Number(body.dailyProfitTarget);
-    if (isNaN(v)) { res.status(400).json({ error: "dailyProfitTarget must be a number" }); return; }
+    if (!Number.isFinite(v) || v <= 0) { res.status(400).json({ error: "dailyProfitTarget must be a positive number" }); return; }
     partial.dailyProfitTarget = v;
   }
   if ("maxTradesPerDay" in body) {
-    partial.maxTradesPerDay = body.maxTradesPerDay === null ? null : Number(body.maxTradesPerDay);
+    if (body.maxTradesPerDay === null) {
+      partial.maxTradesPerDay = null;
+    } else {
+      const v = Number(body.maxTradesPerDay);
+      if (!Number.isInteger(v) || v <= 0) { res.status(400).json({ error: "maxTradesPerDay must be a positive integer or null" }); return; }
+      partial.maxTradesPerDay = v;
+    }
+  }
+  if ("maxLossesPerDirection" in body) {
+    if (body.maxLossesPerDirection === null) {
+      partial.maxLossesPerDirection = null;
+    } else {
+      const v = Number(body.maxLossesPerDirection);
+      if (!Number.isInteger(v) || v <= 0) { res.status(400).json({ error: "maxLossesPerDirection must be a positive integer or null" }); return; }
+      partial.maxLossesPerDirection = v;
+    }
   }
 
   const result = agentController.updateSettings(partial);

@@ -737,7 +737,11 @@
             </div>
             <div class="risk-field">
                 <label>Max Trades Per Day (all instruments)</label>
-                <input type="number" id="rc-max-trades" min="1" placeholder="4 (default config)" />
+                <input type="number" id="rc-max-trades" min="1" placeholder="4" />
+            </div>
+            <div class="risk-field">
+                <label>Max Losses Per Direction (per instrument)</label>
+                <input type="number" id="rc-max-losses" min="1" placeholder="2" />
             </div>
         </div>
         <div class="risk-actions">
@@ -1380,13 +1384,10 @@ function setRiskFeedback(msg, isError) {
 async function loadRiskSettings() {
     try {
         const data = await apiFetch('/api/agent/settings');
-        const lossEl = document.getElementById('rc-loss-limit');
-        const profEl = document.getElementById('rc-profit-target');
-        const tradesEl = document.getElementById('rc-max-trades');
-        if (data.dailyLossLimit != null) lossEl.value = data.dailyLossLimit;
-        if (data.dailyProfitTarget != null) profEl.value = data.dailyProfitTarget;
-        if (data.maxTradesPerDay != null) tradesEl.value = data.maxTradesPerDay;
-        else tradesEl.value = '';
+        if (data.dailyLossLimit != null) document.getElementById('rc-loss-limit').value = data.dailyLossLimit;
+        if (data.dailyProfitTarget != null) document.getElementById('rc-profit-target').value = data.dailyProfitTarget;
+        if (data.maxTradesPerDay != null) document.getElementById('rc-max-trades').value = data.maxTradesPerDay;
+        if (data.maxLossesPerDirection != null) document.getElementById('rc-max-losses').value = data.maxLossesPerDirection;
         const badge = document.getElementById('trading-locked-badge');
         badge.style.display = data.tradingLocked ? 'inline-block' : 'none';
         if (data.tradingLocked) {
@@ -1406,11 +1407,12 @@ async function saveRiskSettings() {
         const lossVal = document.getElementById('rc-loss-limit').value;
         const profVal = document.getElementById('rc-profit-target').value;
         const tradesVal = document.getElementById('rc-max-trades').value;
+        const lossesVal = document.getElementById('rc-max-losses').value;
         const payload = {};
         if (lossVal !== '') payload.dailyLossLimit = Number(lossVal);
         if (profVal !== '') payload.dailyProfitTarget = Number(profVal);
-        if (tradesVal !== '') payload.maxTradesPerDay = Number(tradesVal);
-        else payload.maxTradesPerDay = null;
+        payload.maxTradesPerDay = tradesVal !== '' ? Number(tradesVal) : null;
+        payload.maxLossesPerDirection = lossesVal !== '' ? Number(lossesVal) : null;
         const data = await apiFetch('/api/agent/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1419,8 +1421,8 @@ async function saveRiskSettings() {
         if (data.error) throw new Error(data.error);
         setRiskFeedback('✅ Settings saved', false);
         if (data.settings) {
-            const badge = document.getElementById('trading-locked-badge');
-            badge.style.display = data.settings.tradingLocked ? 'inline-block' : 'none';
+            document.getElementById('trading-locked-badge').style.display =
+                data.settings.tradingLocked ? 'inline-block' : 'none';
         }
     } catch(e) {
         setRiskFeedback('❌ ' + e.message, true);

@@ -10,7 +10,7 @@ import {
   getGetInstrumentsQueryKey,
   getGetDailySummaryQueryKey,
 } from "@workspace/api-client-react";
-import { Play, Square, Activity, AlertCircle, KeyRound, LogOut, Brain, CheckCircle, XCircle, Cpu, BarChart2 } from "lucide-react";
+import { Play, Square, Activity, AlertCircle, KeyRound, LogOut, Brain, CheckCircle, XCircle, Cpu, BarChart2, ShieldAlert, Lock, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -438,6 +438,9 @@ export function Dashboard() {
           </Card>
         )}
 
+        {/* Risk Controls (authenticated only) */}
+        {isAuthenticated && <RiskControlsCard />}
+
         {/* Instruments Grid */}
         <div>
           <h2 className="text-sm font-mono font-bold tracking-widest text-muted-foreground uppercase mb-4 border-b border-border/50 pb-2">
@@ -455,5 +458,216 @@ export function Dashboard() {
         </div>
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RiskControlsCard — editable daily risk limits, liquidate all, lock trading
+// ---------------------------------------------------------------------------
+function RiskControlsCard() {
+  const queryClient = useQueryClient();
+
+  interface RiskSettings {
+    dailyLossLimit: number;
+    dailyProfitTarget: number;
+    maxTradesPerDay: number;
+    maxLossesPerDirection: number;
+    tradingLocked: boolean;
+  }
+
+  const { data: settings, isLoading } = useQuery<RiskSettings>({
+    queryKey: ["agentSettings"],
+    queryFn: () => fetch("/api/agent/settings", { credentials: "include" }).then(r => r.json()),
+    refetchInterval: 10000,
+  });
+
+  const [form, setForm] = useState<{
+    dailyLossLimit: string;
+    dailyProfitTarget: string;
+    maxTradesPerDay: string;
+    maxLossesPerDirection: string;
+  } | null>(null);
+
+  const [feedback, setFeedback] = useState<{ msg: string; error: boolean } | null>(null);
+
+  // Populate form when settings first load
+  if (settings && !form) {
+    setForm({
+      dailyLossLimit: String(settings.dailyLossLimit),
+      dailyProfitTarget: String(settings.dailyProfitTarget),
+      maxTradesPerDay: String(settings.maxTradesPerDay),
+      maxLossesPerDirection: String(settings.maxLossesPerDirection),
+    });
+  }
+
+  const saveSettings = useMutation({
+    mutationFn: async () => {
+      if (!form) throw new Error("Form not ready");
+      const payload: Record<string, number | null> = {
+        dailyLossLimit: Number(form.dailyLossLimit),
+        dailyProfitTarget: Number(form.dailyProfitTarget),
+        maxTradesPerDay: form.maxTradesPerDay !== "" ? Number(form.maxTradesPerDay) : null,
+        maxLossesPerDirection: form.maxLossesPerDirection !== "" ? Number(form.maxLossesPerDirection) : null,
+      };
+      const res = await fetch("/api/agent/settings", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error ?? "Request failed");
+      return data;
+    },
+    onSuccess: () => {
+      setFeedback({ msg: "✅ Settings saved", error: false });
+      queryClient.invalidateQueries({ queryKey: ["agentSettings"] });
+      setTimeout(() => setFeedback(null), 4000);
+    },
+    onError: (err: Error) => {
+      setFeedback({ msg: "❌ " + err.message, error: true });
+    },
+  });
+
+  const liquidateAll = useMutation({
+    mutationFn: async () => {
+      if (!confirm("⚠️ LIQUIDATE ALL — Close all open positions now?")) throw new Error("Cancelled");
+      const res = await fetch("/api/agent/liquidate", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message ?? "Request failed");
+      return data;
+    },
+    onSuccess: (data: { message: string }) => {
+      setFeedback({ msg: "🔴 " + data.message, error: false });
+      setTimeout(() => setFeedback(null), 5000);
+    },
+    onError: (err: Error) => {
+      if (err.message !== "Cancelled") setFeedback({ msg: "❌ " + err.message, error: true });
+    },
+  });
+
+  const lockTrading = useMutation({
+    mutationFn: async () => {
+      if (!confirm("🔒 LOCK TRADING — Disable all new entries until restart?")) throw new Error("Cancelled");
+      const res = await fetch("/api/agent/lock", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message ?? "Request failed");
+      return data;
+    },
+    onSuccess: () => {
+      setFeedback({ msg: "🔒 Trading locked", error: false });
+      queryClient.invalidateQueries({ queryKey: ["agentSettings"] });
+      setTimeout(() => setFeedback(null), 5000);
+    },
+    onError: (err: Error) => {
+      if (err.message !== "Cancelled") setFeedback({ msg: "❌ " + err.message, error: true });
+    },
+  });
+
+  const isLocked = settings?.tradingLocked ?? false;
+
+  return (
+    <Card className="bg-card border border-yellow-500/30 rounded-md">
+      <CardHeader className="pb-3 border-b border-border/50 flex flex-row items-center gap-2">
+        <ShieldAlert className="w-4 h-4 text-yellow-400" />
+        <CardTitle className="text-sm font-mono tracking-tight uppercase text-yellow-400">
+          Risk Controls
+        </CardTitle>
+        {isLocked && (
+          <span className="ml-auto flex items-center gap-1 text-xs font-mono font-bold bg-destructive/20 text-destructive px-2 py-0.5 rounded">
+            <Lock className="w-3 h-3" /> TRADING LOCKED
+          </span>
+        )}
+      </CardHeader>
+      <CardContent className="pt-4">
+        {isLoading || !form ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[0,1,2,3].map(i => <Skeleton key={i} className="h-16 w-full" />)}
+          </div>
+        ) : (
+          <>
+            <p className="text-[11px] text-muted-foreground font-mono mb-4">
+              Changes take effect immediately — no restart required.
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <div>
+                <label className="text-[10px] text-muted-foreground font-mono uppercase block mb-1">Daily Loss Limit ($)</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.dailyLossLimit}
+                  onChange={e => setForm(f => f ? { ...f, dailyLossLimit: e.target.value } : f)}
+                  className="font-mono text-sm h-8"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-muted-foreground font-mono uppercase block mb-1">Daily Profit Target ($)</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.dailyProfitTarget}
+                  onChange={e => setForm(f => f ? { ...f, dailyProfitTarget: e.target.value } : f)}
+                  className="font-mono text-sm h-8"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-muted-foreground font-mono uppercase block mb-1">Max Trades/Day</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.maxTradesPerDay}
+                  onChange={e => setForm(f => f ? { ...f, maxTradesPerDay: e.target.value } : f)}
+                  className="font-mono text-sm h-8"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-muted-foreground font-mono uppercase block mb-1">Max Losses/Direction</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.maxLossesPerDirection}
+                  onChange={e => setForm(f => f ? { ...f, maxLossesPerDirection: e.target.value } : f)}
+                  className="font-mono text-sm h-8"
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button
+                size="sm"
+                variant="outline"
+                className="font-mono text-xs border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10"
+                onClick={() => saveSettings.mutate()}
+                disabled={saveSettings.isPending}
+              >
+                💾 Save Settings
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="font-mono text-xs border-destructive/50 text-destructive hover:bg-destructive/10"
+                onClick={() => liquidateAll.mutate()}
+                disabled={liquidateAll.isPending}
+              >
+                <Zap className="w-3 h-3 mr-1" /> Liquidate All
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="font-mono text-xs border-destructive/70 text-destructive hover:bg-destructive/10"
+                onClick={() => lockTrading.mutate()}
+                disabled={isLocked || lockTrading.isPending}
+              >
+                <Lock className="w-3 h-3 mr-1" /> Lock Trading
+              </Button>
+              {feedback && (
+                <span className={`text-xs font-mono ml-2 ${feedback.error ? "text-destructive" : "text-green-400"}`}>
+                  {feedback.msg}
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

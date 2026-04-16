@@ -97,6 +97,7 @@ class AgentController {
     dailyLossLimit?: number;
     dailyProfitTarget?: number;
     maxTradesPerDay?: number;
+    maxLossesPerDirection?: number;
     tradingLocked?: boolean;
   } = {};
 
@@ -204,17 +205,35 @@ class AgentController {
     return configLimit;
   }
 
+  /** Returns the effective max-losses-per-direction for a symbol (runtime global override takes precedence). */
+  private effectiveMaxLossesPerDirection(symbol: string): number {
+    const configLimit = TRADING_CONFIG.instruments[symbol]?.maxLossesPerDirection ?? 2;
+    if (this.runtimeSettings.maxLossesPerDirection !== undefined) {
+      return Math.min(configLimit, this.runtimeSettings.maxLossesPerDirection);
+    }
+    return configLimit;
+  }
+
   /** Returns the current effective risk settings (runtime overrides merged with config defaults). */
   getSettings(): {
     dailyLossLimit: number;
     dailyProfitTarget: number;
-    maxTradesPerDay: number | null;
+    maxTradesPerDay: number;
+    maxLossesPerDirection: number;
     tradingLocked: boolean;
   } {
+    // Default per-instrument values when no global override is set
+    const defaultMaxTrades = Math.min(
+      ...Object.values(TRADING_CONFIG.instruments).map((c) => c.maxTradesPerDay)
+    );
+    const defaultMaxLosses = Math.min(
+      ...Object.values(TRADING_CONFIG.instruments).map((c) => c.maxLossesPerDirection)
+    );
     return {
       dailyLossLimit: this.effectiveLossLimit(),
       dailyProfitTarget: this.effectiveProfitTarget(),
-      maxTradesPerDay: this.runtimeSettings.maxTradesPerDay ?? null,
+      maxTradesPerDay: this.runtimeSettings.maxTradesPerDay ?? defaultMaxTrades,
+      maxLossesPerDirection: this.runtimeSettings.maxLossesPerDirection ?? defaultMaxLosses,
       tradingLocked: this.runtimeSettings.tradingLocked ?? false,
     };
   }
@@ -224,17 +243,35 @@ class AgentController {
     dailyLossLimit?: number;
     dailyProfitTarget?: number;
     maxTradesPerDay?: number | null;
+    maxLossesPerDirection?: number | null;
   }): { success: boolean; message: string } {
     if (partial.dailyLossLimit !== undefined) {
-      if (partial.dailyLossLimit <= 0) return { success: false, message: "dailyLossLimit must be > 0" };
+      if (!Number.isFinite(partial.dailyLossLimit) || partial.dailyLossLimit <= 0) {
+        return { success: false, message: "dailyLossLimit must be a positive number" };
+      }
       this.runtimeSettings.dailyLossLimit = partial.dailyLossLimit;
     }
     if (partial.dailyProfitTarget !== undefined) {
-      if (partial.dailyProfitTarget <= 0) return { success: false, message: "dailyProfitTarget must be > 0" };
+      if (!Number.isFinite(partial.dailyProfitTarget) || partial.dailyProfitTarget <= 0) {
+        return { success: false, message: "dailyProfitTarget must be a positive number" };
+      }
       this.runtimeSettings.dailyProfitTarget = partial.dailyProfitTarget;
     }
     if ("maxTradesPerDay" in partial) {
+      if (partial.maxTradesPerDay !== null) {
+        if (!Number.isInteger(partial.maxTradesPerDay) || partial.maxTradesPerDay <= 0) {
+          return { success: false, message: "maxTradesPerDay must be a positive integer or null" };
+        }
+      }
       this.runtimeSettings.maxTradesPerDay = partial.maxTradesPerDay ?? undefined;
+    }
+    if ("maxLossesPerDirection" in partial) {
+      if (partial.maxLossesPerDirection !== null) {
+        if (!Number.isInteger(partial.maxLossesPerDirection) || partial.maxLossesPerDirection <= 0) {
+          return { success: false, message: "maxLossesPerDirection must be a positive integer or null" };
+        }
+      }
+      this.runtimeSettings.maxLossesPerDirection = partial.maxLossesPerDirection ?? undefined;
     }
     logger.info({ runtimeSettings: this.runtimeSettings }, "Risk settings updated");
     return { success: true, message: "Settings updated" };
@@ -1383,12 +1420,17 @@ class AgentController {
       if (state.inPosition) continue;
       if (state.todayTrades >= this.effectiveMaxTrades(symbol)) continue;
 
+      // Build effective config incorporating runtime loss-per-direction override
+      const effectiveConfig = this.runtimeSettings.maxLossesPerDirection !== undefined
+        ? { ...config, maxLossesPerDirection: this.effectiveMaxLossesPerDirection(symbol) }
+        : config;
+
       try {
         const lastPrice = await this.client.getLastPrice(state.contractId);
         if (!lastPrice) continue;
         state.lastPrice = lastPrice;
 
-        const signal = checkEntrySignal(lastPrice, state.rangeData, state, config);
+        const signal = checkEntrySignal(lastPrice, state.rangeData, state, effectiveConfig);
         if (!signal) continue;
 
         logger.info({ symbol, signal }, "Entry signal detected, placing order");
