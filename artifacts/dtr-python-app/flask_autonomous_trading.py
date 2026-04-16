@@ -139,6 +139,9 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
     account_name = account_resp.get("accountName", "")
     can_trade = account_resp.get("canTrade", None)
 
+    realized_pnl = ts_status.get("dailyPnl", 0)
+    unrealized_pnl = ts_status.get("unrealizedPnl", 0)
+
     return {
         "success": True,
         "timestamp": datetime.now().isoformat(),
@@ -160,7 +163,9 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
             "balance": balance,
             "account_name": account_name,
             "can_trade": can_trade,
-            "daily_pnl": ts_status.get("dailyPnl", 0),
+            "daily_pnl": realized_pnl,
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
             "daily_loss_hit": ts_status.get("dailyLossHit", False),
             "daily_profit_hit": ts_status.get("dailyProfitHit", False),
             "position_count": position_count,

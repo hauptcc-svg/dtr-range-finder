@@ -37,6 +37,7 @@ export interface AgentStatusData {
   running: boolean;
   sessionPhase: SessionPhase;
   dailyPnl: number;
+  unrealizedPnl: number;
   dailyLossLimit: number;
   dailyProfitTarget: number;
   tradeCount: number;
@@ -82,6 +83,8 @@ class AgentController {
   // Previous position cache snapshot for detecting closes and reading realizedPnl
   private previousPositionsCache: OpenPosition[] = [];
   private lastPositionFetch = 0;
+  // Timestamp of last broker trade sync (ms epoch)
+  private lastBrokerTradeSync = 0;
   // Cache of open broker orders (for self-healing bracket check and /api/agent/orders endpoint)
   private openOrdersCache: BrokerOrder[] = [];
   private lastOrderFetch = 0;
@@ -1136,11 +1139,33 @@ class AgentController {
     return { success: true, message: "Agent stopped successfully" };
   }
 
+  /**
+   * Build a Map<contractId, pointValue> from current instrument states + DB configs.
+   * Used when fetching open positions so we can compute live UP&L.
+   */
+  private buildPointValueMap(): Map<string, number> {
+    const map = new Map<string, number>();
+    for (const [symbol, state] of this.instrumentStates.entries()) {
+      if (!state.contractId) continue;
+      const config = this.getEffectiveConfig(symbol);
+      if (config) map.set(state.contractId, config.pointValue);
+    }
+    return map;
+  }
+
   getStatus(): AgentStatusData {
+    // Compute total unrealized P&L from all instrument statuses (in-memory, fast)
+    const instStatuses = this.getInstrumentStatuses();
+    const unrealizedPnl = instStatuses.reduce(
+      (sum, s) => sum + (s.unrealizedPnl ?? 0),
+      0
+    );
+
     return {
       running: this.running,
       sessionPhase: this.sessionPhase,
       dailyPnl: this.dailyPnl,
+      unrealizedPnl,
       dailyLossLimit: this.effectiveLossLimit(),
       dailyProfitTarget: this.effectiveProfitTarget(),
       tradeCount: this.tradeCount,
@@ -1163,14 +1188,21 @@ class AgentController {
         (p) => state.contractId !== null && p.contractId === state.contractId
       );
       let unrealizedPnl: number | null = null;
-      if (openPos && state.lastPrice && state.positionEntryPrice && config) {
-        const dir = state.positionDirection;
-        if (dir) {
-          const priceDiff =
-            dir === "long"
-              ? state.lastPrice - state.positionEntryPrice
-              : state.positionEntryPrice - state.lastPrice;
-          unrealizedPnl = priceDiff * state.positionQty * config.pointValue;
+      if (openPos) {
+        // Prefer broker-computed UP&L when available (populated from live last price
+        // in getOpenPositions when pointValueMap is passed).
+        if (openPos.unrealizedPnl !== 0) {
+          unrealizedPnl = openPos.unrealizedPnl;
+        } else if (state.lastPrice && state.positionEntryPrice && config) {
+          // Fallback: compute from state.lastPrice (updated during tick)
+          const dir = state.positionDirection;
+          if (dir) {
+            const priceDiff =
+              dir === "long"
+                ? state.lastPrice - state.positionEntryPrice
+                : state.positionEntryPrice - state.lastPrice;
+            unrealizedPnl = priceDiff * state.positionQty * config.pointValue;
+          }
         }
       }
 
@@ -1203,7 +1235,7 @@ class AgentController {
     if (this.client && this.running) {
       try {
         this.previousPositionsCache = this.openPositionsCache;
-        this.openPositionsCache = await this.client.getOpenPositions();
+        this.openPositionsCache = await this.client.getOpenPositions(this.buildPointValueMap());
         this.lastPositionFetch = Date.now();
         // Sync position states based on fresh data
         await this.syncPositionStates();
@@ -1701,8 +1733,106 @@ class AgentController {
       }
 
       logger.info("Startup reconciliation complete");
+
+      // Sync any broker-placed fills that aren't in the local DB
+      await this.syncBrokerTrades();
     } catch (err) {
       logger.error({ err }, "Error during startup reconciliation");
+    }
+  }
+
+  /**
+   * Fetch today's fills from the broker API and insert any that don't already
+   * exist in the local DB (matched by contractId + timestamp ± 30 seconds).
+   * Inserted trades use strategy = "broker" so they show a distinct badge in
+   * the trade history UI.
+   */
+  private async syncBrokerTrades(): Promise<void> {
+    if (!this.client) return;
+
+    // Build a reverse map: contractId → symbol (for DB instrument field)
+    const contractToSymbol = new Map<string, string>();
+    for (const [symbol, state] of this.instrumentStates.entries()) {
+      if (state.contractId) contractToSymbol.set(state.contractId, symbol);
+    }
+
+    const today = this.currentDate;
+    const todayStart = new Date(`${today}T00:00:00.000Z`);
+    const todayEnd   = new Date(`${today}T23:59:59.999Z`);
+
+    let brokerFills: Array<{
+      contractId: string;
+      direction: "long" | "short";
+      qty: number;
+      price: number;
+      pnl: number;
+      timestamp: Date;
+      externalId: string;
+    }>;
+    try {
+      brokerFills = await this.client.getTradeHistory(todayStart, todayEnd);
+    } catch (err) {
+      logger.warn({ err }, "syncBrokerTrades: getTradeHistory threw — skipping sync");
+      return;
+    }
+
+    if (brokerFills.length === 0) {
+      logger.info("syncBrokerTrades: no broker fills returned for today");
+      return;
+    }
+
+    // Load today's existing trades from DB for deduplication
+    const existingTrades = await db
+      .select({ id: tradesTable.id, entryTime: tradesTable.entryTime, instrument: tradesTable.instrument })
+      .from(tradesTable)
+      .where(sql`date(entry_time) = ${today}`);
+
+    let inserted = 0;
+    for (const fill of brokerFills) {
+      const symbol = contractToSymbol.get(fill.contractId);
+      if (!symbol) {
+        // Unknown contract — still insert with contractId as instrument name
+      }
+      const instrument = symbol ?? fill.contractId;
+      const fillTs = fill.timestamp.getTime();
+
+      // Check for existing trade within ±30 s of this fill
+      const isDuplicate = existingTrades.some(
+        (t) =>
+          t.instrument === instrument &&
+          Math.abs(t.entryTime.getTime() - fillTs) <= 30_000
+      );
+
+      if (isDuplicate) continue;
+
+      // Determine session from fill timestamp (UTC hour, approximated to NY)
+      // NY is UTC-4 during EDT; london fills are early morning UTC
+      const utcHour = fill.timestamp.getUTCHours();
+      const session: "london" | "ny" = utcHour >= 7 && utcHour < 21 ? "ny" : "london";
+
+      try {
+        await db.insert(tradesTable).values({
+          instrument,
+          direction: fill.direction,
+          entryPrice: fill.price,
+          exitPrice: fill.price,
+          qty: fill.qty,
+          pnl: fill.pnl,
+          session,
+          status: "closed",
+          entryTime: fill.timestamp,
+          exitTime: fill.timestamp,
+          strategy: "broker",
+          projectxOrderId: fill.externalId,
+        });
+        inserted++;
+      } catch (err) {
+        logger.warn({ err, fill }, "syncBrokerTrades: failed to insert broker fill");
+      }
+    }
+
+    if (inserted > 0) {
+      logger.info({ inserted }, "syncBrokerTrades: inserted broker-sourced fills");
     }
   }
 
@@ -1862,17 +1992,26 @@ class AgentController {
       return;
     }
 
-    // Fetch open positions cache every 2 ticks (60s)
+    // Fetch open positions cache every 2 ticks (60s), with live UP&L calculation
     const now = Date.now();
     if (now - this.lastPositionFetch > 60_000) {
       try {
         this.previousPositionsCache = this.openPositionsCache;
-        this.openPositionsCache = await this.client.getOpenPositions();
+        this.openPositionsCache = await this.client.getOpenPositions(this.buildPointValueMap());
         this.lastPositionFetch = now;
         await this.syncPositionStates();
       } catch (err) {
         logger.error({ err }, "Failed to fetch open positions");
       }
+    }
+
+    // Sync broker-placed fills every 10 minutes so manual trades appear in history
+    const BROKER_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+    if (now - this.lastBrokerTradeSync > BROKER_SYNC_INTERVAL_MS) {
+      this.lastBrokerTradeSync = now;
+      this.syncBrokerTrades().catch((err) => {
+        logger.warn({ err }, "Periodic broker trade sync failed (non-fatal)");
+      });
     }
 
     // Self-healing bracket check — runs every tick when positions are open

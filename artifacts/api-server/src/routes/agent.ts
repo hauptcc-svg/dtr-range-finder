@@ -214,7 +214,12 @@ router.get("/account", async (_req, res): Promise<void> => {
     res.status(503).json({ error: "Account info unavailable — agent may not be authenticated yet" });
     return;
   }
-  res.json(info);
+  const status = agentController.getStatus();
+  res.json({
+    ...info,
+    realizedPnl: status.dailyPnl,
+    unrealizedPnl: status.unrealizedPnl,
+  });
 });
 
 // ---------------------------------------------------------------------------

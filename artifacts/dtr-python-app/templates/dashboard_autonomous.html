@@ -399,6 +399,69 @@
             border: 1px solid rgba(14,165,233,0.3);
         }
 
+        .badge-strategy-broker {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            background: rgba(100,116,139,0.18);
+            color: #94a3b8;
+            border: 1px solid rgba(100,116,139,0.35);
+        }
+
+        /* ── Preset cards ── */
+        .presets-section {
+            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid rgba(0,255,136,0.12);
+        }
+        .presets-label {
+            font-size: 10px;
+            color: #00ff88;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .presets-note {
+            font-size: 9px;
+            color: #555;
+            margin-left: auto;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+        .presets-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 6px;
+        }
+        .preset-card {
+            padding: 7px 10px;
+            border-radius: 6px;
+            background: rgba(0,255,136,0.05);
+            border: 1px solid rgba(0,255,136,0.15);
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .preset-card:hover {
+            background: rgba(0,255,136,0.12);
+            border-color: rgba(0,255,136,0.35);
+        }
+        .preset-card-symbol {
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            font-weight: bold;
+            color: #00ff88;
+        }
+        .preset-card-name {
+            font-size: 9px;
+            color: #888;
+            margin-top: 2px;
+        }
+
         /* ── Export buttons ── */
         .btn-export {
             padding: 5px 12px;
@@ -688,7 +751,7 @@
 <div id="tab-dashboard" class="page active">
 
     <div class="info-box">
-        <strong>How it works:</strong> Select a mode to auto-execute trades every 30 s. Dashboard refreshes every 3 s.
+        <strong>How it works:</strong> Select a mode to auto-execute trades every 30 s. Dashboard refreshes every 2 s.
     </div>
 
     <!-- Mode buttons -->
@@ -745,8 +808,12 @@
                 <span class="data-value" id="can-trade">—</span>
             </div>
             <div class="data-item">
-                <span class="data-label">Daily P&amp;L</span>
+                <span class="data-label">RP&amp;L (Realized)</span>
                 <span class="data-value" id="daily-pnl">—</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">UP&amp;L (Unrealized)</span>
+                <span class="data-value" id="unrealized-pnl">—</span>
             </div>
             <div class="data-item">
                 <span class="data-label">Open Positions</span>
@@ -1009,6 +1076,49 @@
 <div class="modal-overlay" id="pair-modal">
     <div class="pair-modal">
         <div class="pair-modal-title" id="pair-modal-title">Add Instrument</div>
+
+        <!-- Preset cards — only shown in add mode -->
+        <div class="presets-section" id="presets-section">
+            <div class="presets-label">
+                ⚡ Quick add from presets
+                <span class="presets-note">Contract month codes change quarterly (M6 = Jun, U6 = Sep…)</span>
+            </div>
+            <div class="presets-grid">
+                <div class="preset-card" onclick="applyPreset('MYMM6')">
+                    <div class="preset-card-symbol">MYMM6</div>
+                    <div class="preset-card-name">Micro Dow</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('MNQM6')">
+                    <div class="preset-card-symbol">MNQM6</div>
+                    <div class="preset-card-name">Micro NQ</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('MESM6')">
+                    <div class="preset-card-symbol">MESM6</div>
+                    <div class="preset-card-name">Micro S&amp;P 500</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('MCLK6')">
+                    <div class="preset-card-symbol">MCLK6</div>
+                    <div class="preset-card-name">Micro Crude Oil</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('MGCM6')">
+                    <div class="preset-card-symbol">MGCM6</div>
+                    <div class="preset-card-name">Micro Gold</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('MBTM6')">
+                    <div class="preset-card-symbol">MBTM6</div>
+                    <div class="preset-card-name">Micro Bitcoin</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('M6EM6')">
+                    <div class="preset-card-symbol">M6EM6</div>
+                    <div class="preset-card-name">Micro EUR/USD</div>
+                </div>
+                <div class="preset-card" onclick="applyPreset('MSIM6')">
+                    <div class="preset-card-symbol">MSIM6</div>
+                    <div class="preset-card-name">Micro Silver</div>
+                </div>
+            </div>
+        </div>
+
         <div class="pair-form-grid">
             <div class="pair-field">
                 <label>Symbol *</label>
@@ -1149,10 +1259,15 @@ async function updateDashboard() {
             ctEl.style.color = '';
         }
 
-        const dailyPnl = pl.daily_pnl || 0;
+        const dailyPnl = pl.realized_pnl ?? pl.daily_pnl ?? 0;
         const pnlEl = document.getElementById('daily-pnl');
-        pnlEl.textContent = (dailyPnl >= 0 ? '+' : '') + '$' + dailyPnl.toFixed(2);
+        pnlEl.textContent = (dailyPnl >= 0 ? '+' : '') + '$' + Number(dailyPnl).toFixed(2);
         pnlEl.className = 'data-value ' + (dailyPnl >= 0 ? 'positive' : 'negative');
+
+        const upl = pl.unrealized_pnl ?? 0;
+        const uplEl = document.getElementById('unrealized-pnl');
+        uplEl.textContent = (upl >= 0 ? '+' : '') + '$' + Number(upl).toFixed(2);
+        uplEl.className = 'data-value ' + (upl >= 0 ? 'positive' : 'negative');
 
         document.getElementById('pos-count').textContent = pl.position_count ?? 0;
         const wr = pl.win_rate;
@@ -1389,6 +1504,8 @@ function renderTrades(trades) {
             : '';
         const strategyBadge = t.strategy === 'claude'
             ? `<span class="badge-strategy-claude">🤖 Claude AI</span>`
+            : t.strategy === 'broker'
+            ? `<span class="badge-strategy-broker">📋 Broker</span>`
             : `<span class="badge-strategy-dtr">📐 DTR</span>`;
 
         html += `<tr>
@@ -1449,6 +1566,9 @@ function openJournal(trade) {
     if (trade.strategy === 'claude') {
         stratBadge.className = 'badge-strategy-claude';
         stratBadge.textContent = '🤖 Claude AI';
+    } else if (trade.strategy === 'broker') {
+        stratBadge.className = 'badge-strategy-broker';
+        stratBadge.textContent = '📋 Broker';
     } else {
         stratBadge.className = 'badge-strategy-dtr';
         stratBadge.textContent = '📐 DTR Strategy';
@@ -1571,6 +1691,32 @@ async function exportTrades(format) {
 }
 
 // ─── Pairs manager ───────────────────────────────────────────────────────────
+
+const PAIR_PRESETS = {
+    MYMM6: { symbol: 'MYMM6', name: 'Micro Dow (MYM)',       qty: 2, pointValue: 0.5,     minTick: 1,      strategyMode: 'atr_pullback', sessionStart: '09:13', sessionEnd: '14:00', maxTradesPerDay: 4 },
+    MNQM6: { symbol: 'MNQM6', name: 'Micro NQ (Nasdaq)',     qty: 3, pointValue: 0.5,     minTick: 0.25,   strategyMode: 'atr_pullback', sessionStart: '09:13', sessionEnd: '14:00', maxTradesPerDay: 4 },
+    MESM6: { symbol: 'MESM6', name: 'Micro S&P 500 (MES)',   qty: 2, pointValue: 5.0,     minTick: 0.25,   strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '14:00', maxTradesPerDay: 4 },
+    MCLK6: { symbol: 'MCLK6', name: 'Micro Crude Oil',       qty: 2, pointValue: 1.0,     minTick: 0.01,   strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '14:00', maxTradesPerDay: 4 },
+    MGCM6: { symbol: 'MGCM6', name: 'Micro Gold',            qty: 2, pointValue: 1.0,     minTick: 0.1,    strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '14:00', maxTradesPerDay: 4 },
+    MBTM6: { symbol: 'MBTM6', name: 'Micro Bitcoin',         qty: 1, pointValue: 5.0,     minTick: 5,      strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '14:00', maxTradesPerDay: 4 },
+    M6EM6: { symbol: 'M6EM6', name: 'Micro EUR/USD',         qty: 2, pointValue: 12500,   minTick: 0.0001, strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '14:00', maxTradesPerDay: 4 },
+    MSIM6: { symbol: 'MSIM6', name: 'Micro Silver',          qty: 2, pointValue: 1000.0,  minTick: 0.005,  strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '14:00', maxTradesPerDay: 4 },
+};
+
+function applyPreset(symbol) {
+    const p = PAIR_PRESETS[symbol];
+    if (!p) return;
+    document.getElementById('pf-symbol').value       = p.symbol;
+    document.getElementById('pf-name').value         = p.name;
+    document.getElementById('pf-strategy').value     = p.strategyMode;
+    document.getElementById('pf-qty').value          = p.qty;
+    document.getElementById('pf-session-start').value = p.sessionStart;
+    document.getElementById('pf-session-end').value  = p.sessionEnd;
+    document.getElementById('pf-point-value').value  = p.pointValue;
+    document.getElementById('pf-min-tick').value     = p.minTick;
+    document.getElementById('pf-max-trades').value   = p.maxTradesPerDay;
+}
+
 let pairEditSymbol = null;
 const pairsById = {};
 
@@ -1629,6 +1775,8 @@ function openPairModal(pair) {
     document.getElementById('pf-min-tick').value = pair ? pair.minTick : 0.25;
     document.getElementById('pf-max-trades').value = pair ? pair.maxTradesPerDay : 4;
     document.getElementById('btn-pair-save').disabled = false;
+    // Show presets only in add mode
+    document.getElementById('presets-section').style.display = pair ? 'none' : '';
     document.getElementById('pair-modal').classList.add('open');
 }
 
@@ -1706,13 +1854,13 @@ function getActiveTab() {
 }
 
 function startPolling() {
-    // Dashboard: every 3s
+    // Dashboard: every 2s
     setInterval(() => {
         if (getActiveTab() === 'dashboard') {
             updateDashboard();
             updateInstruments();
         }
-    }, 3000);
+    }, 2000);
 
     // Positions: every 5s
     setInterval(() => {

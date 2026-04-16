@@ -467,8 +467,15 @@ export class ProjectXClient {
    * Get open positions for the account.
    * API returns PositionModel.type: 1=Long, 2=Short with size always positive.
    * We normalise to negative size for short positions internally.
+   *
+   * If `pointValueByContractId` is provided, fetches the current last price for
+   * each open position and computes:
+   *   unrealizedPnl = size × (lastPrice − averagePrice) × pointValue
+   * (for shorts: size is negative, so the sign works out correctly)
    */
-  async getOpenPositions(): Promise<OpenPosition[]> {
+  async getOpenPositions(
+    pointValueByContractId?: Map<string, number>
+  ): Promise<OpenPosition[]> {
     const response = await this.request<{
       positions: Array<{
         id: number;
@@ -485,13 +492,133 @@ export class ProjectXClient {
       "/api/Position/searchOpen",
       { accountId: this.accountId }
     );
-    return (response.positions || []).map((p) => ({
+
+    const rawPositions = (response.positions || []).map((p) => ({
       contractId: p.contractId,
       size: p.type === 2 ? -p.size : p.size, // short = negative
       averagePrice: p.averagePrice,
-      unrealizedPnl: 0, // not provided by this endpoint
+      unrealizedPnl: 0 as number, // calculated below if pointValueMap provided
       realizedPnl: 0,
     }));
+
+    // Fetch live last prices and compute UP&L when point values are available
+    if (pointValueByContractId && rawPositions.length > 0) {
+      await Promise.all(
+        rawPositions.map(async (pos) => {
+          const pointValue = pointValueByContractId.get(pos.contractId);
+          if (!pointValue) return;
+          const lastPrice = await this.getLastPrice(pos.contractId);
+          if (lastPrice == null) return;
+          // size is signed: positive=long, negative=short
+          pos.unrealizedPnl = pos.size * (lastPrice - pos.averagePrice) * pointValue;
+        })
+      );
+    }
+
+    return rawPositions;
+  }
+
+  /**
+   * Fetch filled trade history for the account for a given time range.
+   * Tries POST /api/Trade/search first; falls back to POST /api/Order/search
+   * (filtering for filled/closed orders) if Trade endpoint returns nothing.
+   *
+   * Returns an array of normalised fill records. On any error returns an empty
+   * array so the caller can continue without crashing.
+   */
+  async getTradeHistory(
+    from: Date,
+    to: Date
+  ): Promise<Array<{
+    contractId: string;
+    direction: "long" | "short";
+    qty: number;
+    price: number;
+    pnl: number;
+    timestamp: Date;
+    externalId: string;
+  }>> {
+    // ── Attempt 1: POST /api/Trade/search ──────────────────────────────────
+    try {
+      const tradeResp = await this.request<{
+        trades?: Array<{
+          id: number;
+          contractId: string;
+          accountId: number;
+          creationTimestamp: string;
+          type?: number;   // 1=Long, 2=Short
+          side?: number;   // 0=Buy, 1=Sell
+          size?: number;
+          price?: number;
+          realizedPnl?: number;
+          profit?: number;
+          profitAndLoss?: number;
+        }>;
+      }>("POST", "/api/Trade/search", {
+        accountId: this.accountId,
+        startTimestamp: from.toISOString(),
+        stopTimestamp: to.toISOString(),
+      });
+
+      const fills = tradeResp.trades ?? [];
+      if (fills.length > 0) {
+        return fills.map((f) => {
+          const isBuy = f.side === 0 || f.type === 1;
+          return {
+            contractId: String(f.contractId),
+            direction: isBuy ? "long" : "short",
+            qty: f.size ?? 1,
+            price: f.price ?? 0,
+            pnl: f.realizedPnl ?? f.profit ?? f.profitAndLoss ?? 0,
+            timestamp: new Date(f.creationTimestamp),
+            externalId: `trade_${f.id}`,
+          };
+        });
+      }
+    } catch (err) {
+      logger.warn({ err }, "POST /api/Trade/search failed — falling back to Order/search");
+    }
+
+    // ── Attempt 2: POST /api/Order/search (filled orders) ──────────────────
+    try {
+      const orderResp = await this.request<{
+        orders?: Array<{
+          id: number;
+          contractId: string;
+          accountId: number;
+          creationTimestamp: string;
+          status?: number; // 2=Filled, 3=PartiallyFilled
+          side?: number;   // 0=Buy/Bid, 1=Sell/Ask
+          size?: number;
+          limitPrice?: number;
+          stopPrice?: number;
+          avgFillPrice?: number;
+          filledSize?: number;
+        }>;
+      }>("POST", "/api/Order/search", {
+        accountId: this.accountId,
+        startTimestamp: from.toISOString(),
+      });
+
+      // Status 2 = Filled
+      const filledOrders = (orderResp.orders ?? []).filter(
+        (o) => o.status === 2 && new Date(o.creationTimestamp) <= to
+      );
+
+      return filledOrders.map((o) => ({
+        contractId: String(o.contractId),
+        direction: o.side === 0 ? "long" : "short",
+        qty: o.filledSize ?? o.size ?? 1,
+        price: o.avgFillPrice ?? o.limitPrice ?? o.stopPrice ?? 0,
+        pnl: 0, // Order endpoint doesn't carry P&L — agent will use 0
+        timestamp: new Date(o.creationTimestamp),
+        externalId: `order_${o.id}`,
+      }));
+    } catch (err) {
+      logger.warn({ err }, "POST /api/Order/search also failed — returning empty trade history");
+    }
+
+    return [];
   }
 
   /**
