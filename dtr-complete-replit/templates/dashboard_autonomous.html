@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DTR Autonomous Trading</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #0f1419 0%, #1a1f2e 100%);
+            color: #e0e0e0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #00ff88;
+            margin-bottom: 30px;
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+        }
+
+        .mode-section {
+            background: rgba(0, 0, 0, 0.4);
+            border: 2px solid rgba(0, 255, 136, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .mode-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.2s;
+        }
+
+        .btn-dtr {
+            background: linear-gradient(135deg, #3b82f6, #1e40af);
+            color: white;
+        }
+
+        .btn-dtr:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+
+        .btn-claude {
+            background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+            color: white;
+        }
+
+        .btn-claude:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+        }
+
+        .btn-halt {
+            background: linear-gradient(135deg, #ef4444, #991b1b);
+            color: white;
+        }
+
+        .btn-halt:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .status-card {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(0, 255, 136, 0.2);
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .status-label {
+            color: #00ff88;
+            font-size: 11px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .status-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .status-subtext {
+            color: #888;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+
+        .status-running {
+            color: #10b981;
+        }
+
+        .status-halted {
+            color: #ef4444;
+        }
+
+        .status-monitoring {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .data-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .data-card {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(0, 255, 136, 0.2);
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .data-title {
+            color: #00ff88;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .data-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(0, 255, 136, 0.1);
+            font-size: 13px;
+        }
+
+        .data-item:last-child {
+            border-bottom: none;
+        }
+
+        .data-label {
+            color: #aaa;
+        }
+
+        .data-value {
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .positive {
+            color: #10b981;
+        }
+
+        .negative {
+            color: #ef4444;
+        }
+
+        .info-box {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #cbd5e1;
+        }
+
+        .info-box strong {
+            color: #3b82f6;
+        }
+
+        .refresh-indicator {
+            display: inline-block;
+            padding: 8px 12px;
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 4px;
+            font-size: 11px;
+            color: #00ff88;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .data-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .mode-buttons {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ Autonomous Trading System</h1>
+
+        <!-- Info Box -->
+        <div class="info-box">
+            <strong>How it works:</strong> Select a mode below. System will automatically execute trades without manual clicks. Dashboard auto-refreshes every 2 seconds.
+        </div>
+
+        <!-- Mode Selection -->
+        <div class="mode-section">
+            <h2 style="color: #00ff88; margin-bottom: 15px;">📊 Trading Mode</h2>
+            <div class="mode-buttons">
+                <button class="btn-dtr" onclick="switchMode('dtr')">📊 DTR RULES (Auto)</button>
+                <button class="btn-claude" onclick="switchMode('claude')">🧠 CLAUDE AI (Auto)</button>
+                <button class="btn-halt" onclick="switchMode('halt')">⏹️ HALT</button>
+            </div>
+        </div>
+
+        <!-- Status Cards -->
+        <div class="status-grid">
+            <div class="status-card">
+                <div class="status-label">Current Mode</div>
+                <div class="status-value" id="current-mode">HALTED</div>
+                <div class="status-subtext" id="mode-description">No trading active</div>
+            </div>
+
+            <div class="status-card">
+                <div class="status-label">Auto-Execution</div>
+                <div class="status-value">
+                    <span class="status-monitoring" id="monitoring-indicator"></span>
+                    <span id="auto-status">OFF</span>
+                </div>
+                <div class="status-subtext">Checks every 30 seconds</div>
+            </div>
+
+            <div class="status-card">
+                <div class="status-label">Daily Trades</div>
+                <div class="status-value" id="daily-trades">0/4</div>
+                <div class="status-subtext" id="trades-detail"></div>
+            </div>
+
+            <div class="status-card">
+                <div class="status-label">Last Update</div>
+                <div class="status-value" id="last-update">--:--:--</div>
+                <div class="status-subtext">Auto-refreshing</div>
+            </div>
+        </div>
+
+        <!-- Data Grid -->
+        <div class="data-grid">
+            <!-- Account Data -->
+            <div class="data-card">
+                <div class="data-title">💰 Account</div>
+                <div class="data-item">
+                    <span class="data-label">Balance</span>
+                    <span class="data-value" id="balance">$150K</span>
+                </div>
+                <div class="data-item">
+                    <span class="data-label">Daily P&L</span>
+                    <span class="data-value" id="daily-pnl">+$0</span>
+                </div>
+                <div class="data-item">
+                    <span class="data-label">Positions</span>
+                    <span class="data-value" id="positions">0</span>
+                </div>
+            </div>
+
+            <!-- Performance Data -->
+            <div class="data-card">
+                <div class="data-title">📈 Performance</div>
+                <div class="data-item">
+                    <span class="data-label">Win Rate</span>
+                    <span class="data-value" id="win-rate">--</span>
+                </div>
+                <div class="data-item">
+                    <span class="data-label">Biggest Win</span>
+                    <span class="data-value positive" id="biggest-win">--</span>
+                </div>
+                <div class="data-item">
+                    <span class="data-label">Biggest Loss</span>
+                    <span class="data-value negative" id="biggest-loss">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Refresh Indicator -->
+        <div class="refresh-indicator">
+            🔄 Auto-refreshing every 2 seconds • No manual refresh needed
+        </div>
+    </div>
+
+    <script>
+        // Auto-refresh every 2 seconds
+        setInterval(updateDashboard, 2000);
+
+        async function switchMode(mode) {
+            try {
+                const endpoint = mode === 'dtr' ? '/api/mode/dtr' :
+                                mode === 'claude' ? '/api/mode/claude' :
+                                '/api/mode/halt';
+
+                const res = await fetch(endpoint, { method: 'POST' });
+                const data = await res.json();
+
+                if (data.success) {
+                    console.log(`Switched to ${mode}`);
+                    updateDashboard();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error switching mode: ' + e.message);
+            }
+        }
+
+        async function updateDashboard() {
+            try {
+                const res = await fetch('/api/live/dashboard');
+                const data = await res.json();
+
+                if (!data.success) return;
+
+                // Update mode
+                const mode = data.orchestrator.mode;
+                document.getElementById('current-mode').textContent = mode.toUpperCase();
+
+                // Update auto-execution status
+                const autoExecuting = data.orchestrator.auto_executing;
+                document.getElementById('auto-status').textContent = autoExecuting ? 'ON' : 'OFF';
+                const indicator = document.getElementById('monitoring-indicator');
+                indicator.style.background = autoExecuting ? '#10b981' : '#888';
+
+                // Update mode description
+                const descriptions = {
+                    'dtr': '🔄 Auto-executing on DTR stage 5',
+                    'claude': '🧠 Auto-executing on Claude signals + Bias exit',
+                    'halted': '⏹️ Trading halted'
+                };
+                document.getElementById('mode-description').textContent = descriptions[mode];
+
+                // Update daily trades
+                const dtrTrades = data.orchestrator.daily_trades.dtr;
+                const claudeTrades = data.orchestrator.daily_trades.claude;
+                const total = dtrTrades + claudeTrades;
+                document.getElementById('daily-trades').textContent = `${total}/4`;
+                document.getElementById('trades-detail').textContent = `DTR: ${dtrTrades}, Claude: ${claudeTrades}`;
+
+                // Update last update time
+                const timestamp = new Date(data.timestamp);
+                document.getElementById('last-update').textContent = timestamp.toLocaleTimeString();
+
+                // Update P&L data
+                if (data.p_and_l) {
+                    document.getElementById('balance').textContent = 
+                        '$' + (data.p_and_l.balance / 1000).toFixed(0) + 'K';
+                    
+                    const dailyPnL = data.p_and_l.daily_pnl || 0;
+                    const pnlElement = document.getElementById('daily-pnl');
+                    pnlElement.textContent = (dailyPnL >= 0 ? '+' : '') + '$' + dailyPnL.toFixed(0);
+                    pnlElement.className = 'data-value ' + (dailyPnL >= 0 ? 'positive' : 'negative');
+                    
+                    document.getElementById('positions').textContent = data.p_and_l.position_count || 0;
+                    document.getElementById('win-rate').textContent = 
+                        (data.p_and_l.win_rate * 100 || 0).toFixed(0) + '%';
+                }
+
+            } catch (e) {
+                console.error('Error updating dashboard:', e);
+            }
+        }
+
+        // Initial update
+        updateDashboard();
+    </script>
+</body>
+</html>

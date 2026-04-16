@@ -1,0 +1,18 @@
+run = "python flask_autonomous_trading.py"
+language = "python3"
+
+[env]
+PROJECTX_USERNAME = "hauptcc@gmail.com"
+PROJECTX_PASSWORD = "Craig21*"
+PROJECTX_ACCOUNT_ID = "29127"
+TELEGRAM_BOT_TOKEN = "8714653890:AAFVvuak4l2nmCyqS4MtbJMyoHl8mR7C1QY"
+TELEGRAM_CHAT_ID = "332762243"
+
+[packager]
+language = "python3"
+ignoredPackages = ["unit_tests"]
+
+[packager.features]
+packageSearch = true
+guessImports = true
+enableGuessImports = true
