@@ -196,22 +196,20 @@ class AgentController {
     return this.runtimeSettings.dailyProfitTarget ?? TRADING_CONFIG.dailyProfitTarget;
   }
 
-  /** Returns the effective max-trades-per-day for a symbol (runtime global override takes precedence). */
+  /** Returns the effective max-trades-per-day for a symbol (runtime override fully replaces config when set). */
   private effectiveMaxTrades(symbol: string): number {
-    const configLimit = TRADING_CONFIG.instruments[symbol]?.maxTradesPerDay ?? 4;
     if (this.runtimeSettings.maxTradesPerDay !== undefined) {
-      return Math.min(configLimit, this.runtimeSettings.maxTradesPerDay);
+      return this.runtimeSettings.maxTradesPerDay;
     }
-    return configLimit;
+    return TRADING_CONFIG.instruments[symbol]?.maxTradesPerDay ?? 4;
   }
 
-  /** Returns the effective max-losses-per-direction for a symbol (runtime global override takes precedence). */
+  /** Returns the effective max-losses-per-direction for a symbol (runtime override fully replaces config when set). */
   private effectiveMaxLossesPerDirection(symbol: string): number {
-    const configLimit = TRADING_CONFIG.instruments[symbol]?.maxLossesPerDirection ?? 2;
     if (this.runtimeSettings.maxLossesPerDirection !== undefined) {
-      return Math.min(configLimit, this.runtimeSettings.maxLossesPerDirection);
+      return this.runtimeSettings.maxLossesPerDirection;
     }
-    return configLimit;
+    return TRADING_CONFIG.instruments[symbol]?.maxLossesPerDirection ?? 2;
   }
 
   /** Returns the current effective risk settings (runtime overrides merged with config defaults). */
@@ -1429,10 +1427,11 @@ class AgentController {
       if (state.inPosition) continue;
       if (state.todayTrades >= this.effectiveMaxTrades(symbol)) continue;
 
-      // Build effective config incorporating runtime loss-per-direction override
-      const effectiveConfig = this.runtimeSettings.maxLossesPerDirection !== undefined
-        ? { ...config, maxLossesPerDirection: this.effectiveMaxLossesPerDirection(symbol) }
-        : config;
+      // Build effective config — runtime overrides fully replace config values when set
+      const effectiveConfig = {
+        ...config,
+        maxLossesPerDirection: this.effectiveMaxLossesPerDirection(symbol),
+      };
 
       try {
         const lastPrice = await this.client.getLastPrice(state.contractId);

@@ -222,7 +222,7 @@ router.get("/account", async (_req, res): Promise<void> => {
 // POST /api/agent/settings  — applies partial runtime overrides
 //   Body: { dailyLossLimit?: number, dailyProfitTarget?: number, maxTradesPerDay?: number | null }
 // ---------------------------------------------------------------------------
-router.get("/agent/settings", (_req, res): void => {
+router.get("/agent/settings", requireAgentKeyOrSession, (_req, res): void => {
   res.json(agentController.getSettings());
 });
 
