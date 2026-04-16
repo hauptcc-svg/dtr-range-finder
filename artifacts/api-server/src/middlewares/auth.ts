@@ -42,6 +42,12 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
+export function clearSession(req: Request, res: Response): void {
+  const token = req.cookies?.[SESSION_COOKIE] as string | undefined;
+  if (token) sessions.delete(token);
+  res.clearCookie(SESSION_COOKIE);
+}
+
 export function requireAgentKeyOrSession(req: Request, res: Response, next: NextFunction): void {
   const secret = process.env.AGENT_CONTROL_SECRET;
   if (!secret) {

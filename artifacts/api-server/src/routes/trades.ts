@@ -69,7 +69,7 @@ router.get("/trades", async (req, res): Promise<void> => {
 });
 
 router.patch("/trades/:id/notes", requireAgentKeyOrSession, async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params["id"] as string, 10);
   if (isNaN(id)) {
     res.status(400).json({ success: false, message: "Invalid trade ID" });
     return;

@@ -262,7 +262,7 @@ class AgentController {
           .returning();
 
         state.inPosition = true;
-        state.positionDirection = decision.action;
+        state.positionDirection = decision.action as "long" | "short";
         state.positionQty = config.qty;
         state.positionEntryPrice = price;
         state.positionOpenedAt = new Date().toISOString();
@@ -405,7 +405,7 @@ class AgentController {
             .returning();
 
           state.inPosition = true;
-          state.positionDirection = decision.action;
+          state.positionDirection = decision.action as "long" | "short";
           state.positionQty = config.qty;
           state.positionEntryPrice = price;
           state.positionOpenedAt = new Date().toISOString();
@@ -528,7 +528,7 @@ class AgentController {
           .returning();
 
         state.inPosition = true;
-        state.positionDirection = decision.action;
+        state.positionDirection = decision.action as "long" | "short";
         state.positionQty = config.qty;
         state.positionEntryPrice = entryPrice;
         state.positionOpenedAt = new Date().toISOString();

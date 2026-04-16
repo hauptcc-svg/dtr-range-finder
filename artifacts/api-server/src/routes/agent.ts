@@ -11,7 +11,7 @@ import {
 import { db, tradesTable, dailySummaryTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { currentNYDate } from "../lib/trading-config";
-import { requireAgentKeyOrSession, issueSession, isValidSession } from "../middlewares/auth";
+import { requireAgentKeyOrSession, issueSession, isValidSession, clearSession } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
@@ -41,9 +41,7 @@ router.post("/agent/session", (req: Request, res: Response): void => {
 // DELETE /api/agent/session — logout (clears the session cookie)
 // ---------------------------------------------------------------------------
 router.delete("/agent/session", (req: Request, res: Response): void => {
-  const token = req.cookies?.[SESSION_COOKIE] as string | undefined;
-  if (token) sessions.delete(token);
-  res.clearCookie(SESSION_COOKIE);
+  clearSession(req, res);
   res.json({ authenticated: false });
 });
 
