@@ -181,7 +181,8 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
 
 @app.route("/")
 def dashboard():
-    resp = make_response(render_template("dashboard_autonomous.html", base_path=BASE_PATH))
+    build_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    resp = make_response(render_template("dashboard_autonomous.html", base_path=BASE_PATH, build_ts=build_ts))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"

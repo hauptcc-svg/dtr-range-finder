@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>DeclanCapital FX</title>
     <link rel="icon" type="image/svg+xml" href="{{ base_path }}/static/favicon.svg">
     <style>
@@ -1022,8 +1025,33 @@
     <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
             <div class="card-title" style="margin-bottom:0">🏦 Account Management</div>
-            <button class="btn-add-pair" onclick="openAccountModal()">+ Add Account</button>
+            <button class="btn-add-pair" id="btn-toggle-acct-form" onclick="openAccountForm()">+ Add Account</button>
         </div>
+
+        <!-- Inline add-account form (hidden by default) -->
+        <div id="account-add-form" style="display:none;background:rgba(0,255,136,0.04);border:1px solid rgba(0,255,136,0.15);border-radius:8px;padding:16px;margin-bottom:16px">
+            <div style="font-size:13px;font-weight:bold;color:#00ff88;margin-bottom:12px">Add Account</div>
+            <div id="acct-modal-feedback" style="min-height:16px;font-size:11px;margin-bottom:10px"></div>
+            <div class="pair-form-grid">
+                <div class="pair-field">
+                    <label>Account ID (numeric) *</label>
+                    <input id="af-id" type="number" min="1" step="1" placeholder="e.g. 20936179">
+                </div>
+                <div class="pair-field">
+                    <label>Account Number *</label>
+                    <input id="af-number" type="text" placeholder="e.g. 50KTC-V2-123456-78901234" maxlength="80">
+                </div>
+                <div class="pair-field full">
+                    <label>Label (optional)</label>
+                    <input id="af-label" type="text" placeholder="e.g. 50K Combine Attempt 2" maxlength="80">
+                </div>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end">
+                <button class="btn-pair-cancel" onclick="closeAccountForm()">Cancel</button>
+                <button class="btn-pair-save" id="btn-acct-save" onclick="saveAccount()">Save</button>
+            </div>
+        </div>
+
         <div id="acct-feedback" style="min-height:18px;font-size:11px;margin-bottom:8px"></div>
         <div class="table-wrap">
             <table id="accounts-table">
@@ -1044,32 +1072,6 @@
     </div>
     <div class="info-box" style="font-size:11px">
         <strong>Note:</strong> Activating an account will flatten all open positions on the current account before switching. Daily P&amp;L counters reset on switch.
-    </div>
-</div>
-
-<!-- ═══════ Account Modal ═══════ -->
-<div class="modal-overlay" id="account-modal">
-    <div class="pair-modal">
-        <div class="pair-modal-title">Add Account</div>
-        <div id="acct-modal-feedback" style="min-height:16px;font-size:11px;margin-bottom:10px"></div>
-        <div class="pair-form-grid">
-            <div class="pair-field">
-                <label>Account ID (numeric) *</label>
-                <input id="af-id" type="number" min="1" step="1" placeholder="e.g. 20936179">
-            </div>
-            <div class="pair-field">
-                <label>Account Number *</label>
-                <input id="af-number" type="text" placeholder="e.g. 50KTC-V2-123456-78901234" maxlength="80">
-            </div>
-            <div class="pair-field full">
-                <label>Label (optional)</label>
-                <input id="af-label" type="text" placeholder="e.g. 50K Combine Attempt 2" maxlength="80">
-            </div>
-        </div>
-        <div style="display:flex;gap:10px;margin-top:18px;justify-content:flex-end">
-            <button class="btn-pair-cancel" onclick="closeAccountModal()">Cancel</button>
-            <button class="btn-pair-save" id="btn-acct-save" onclick="saveAccount()">Save</button>
-        </div>
     </div>
 </div>
 
@@ -2013,16 +2015,18 @@ async function loadAccounts() {
     }
 }
 
-function openAccountModal() {
+function openAccountForm() {
     document.getElementById('af-id').value = '';
     document.getElementById('af-number').value = '';
     document.getElementById('af-label').value = '';
     document.getElementById('acct-modal-feedback').textContent = '';
-    document.getElementById('account-modal').classList.add('open');
+    document.getElementById('account-add-form').style.display = 'block';
+    document.getElementById('btn-toggle-acct-form').textContent = '✕ Cancel';
 }
 
-function closeAccountModal() {
-    document.getElementById('account-modal').classList.remove('open');
+function closeAccountForm() {
+    document.getElementById('account-add-form').style.display = 'none';
+    document.getElementById('btn-toggle-acct-form').textContent = '+ Add Account';
 }
 
 function setModalFeedback(msg, isErr) {
@@ -2048,7 +2052,7 @@ async function saveAccount() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ accountId, accountNumber, label: label || null }),
         });
-        closeAccountModal();
+        closeAccountForm();
         setAcctFeedback('Account registered.', false);
         await loadAccounts();
     } catch(e) {
@@ -2083,10 +2087,6 @@ async function deleteAccount(rowId) {
     }
 }
 
-document.getElementById('account-modal').addEventListener('click', function(e) {
-    if (e.target === this) closeAccountModal();
-});
-
 // ─── Init ─────────────────────────────────────────────────────────────────────
 updateDashboard();
 updateInstruments();
@@ -2094,5 +2094,8 @@ loadRiskSettings();
 loadAccounts();
 startPolling();
 </script>
+<div style="text-align:center;padding:8px;font-size:10px;color:#333;font-family:monospace">
+    build {{ build_ts }}
+</div>
 </body>
 </html>
