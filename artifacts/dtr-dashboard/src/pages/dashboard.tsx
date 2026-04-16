@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   useGetAgentStatus, 
@@ -490,15 +490,17 @@ function RiskControlsCard() {
 
   const [feedback, setFeedback] = useState<{ msg: string; error: boolean } | null>(null);
 
-  // Populate form when settings first load
-  if (settings && !form) {
-    setForm({
-      dailyLossLimit: String(settings.dailyLossLimit),
-      dailyProfitTarget: String(settings.dailyProfitTarget),
-      maxTradesPerDay: String(settings.maxTradesPerDay),
-      maxLossesPerDirection: String(settings.maxLossesPerDirection),
-    });
-  }
+  // Populate form once when settings first load (not on re-fetches, to avoid clobbering user edits)
+  useEffect(() => {
+    if (settings && !form) {
+      setForm({
+        dailyLossLimit: String(settings.dailyLossLimit),
+        dailyProfitTarget: String(settings.dailyProfitTarget),
+        maxTradesPerDay: String(settings.maxTradesPerDay),
+        maxLossesPerDirection: String(settings.maxLossesPerDirection),
+      });
+    }
+  }, [settings, form]);
 
   const saveSettings = useMutation({
     mutationFn: async () => {
