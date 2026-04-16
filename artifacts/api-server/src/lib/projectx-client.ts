@@ -28,6 +28,44 @@ export interface OrderResult {
   status: string;
 }
 
+/**
+ * Thrown when the entry market order itself was rejected — no position was opened.
+ * Any catch block that sees this error should abort without state mutation.
+ */
+export class EntryOrderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EntryOrderError";
+  }
+}
+
+/**
+ * Thrown when the entry market order filled successfully but one or more
+ * bracket (SL/TP) orders failed after all retries.
+ * The position IS open at the broker; callers must persist trade state and
+ * allow the healer to re-place the missing bracket on the next tick.
+ */
+export class BracketOrderError extends Error {
+  readonly entryOrderId: string;
+  constructor(message: string, entryOrderId: string) {
+    super(message);
+    this.name = "BracketOrderError";
+    this.entryOrderId = entryOrderId;
+  }
+}
+
+export interface BrokerOrder {
+  id: number;
+  contractId: string;
+  type: number; // 1=Limit, 2=Market, 4=Stop
+  side: number; // 0=Bid/Buy, 1=Ask/Sell
+  size: number;
+  limitPrice: number | null;
+  stopPrice: number | null;
+  status: number; // 1=Open, 6=Pending
+  customTag: string | null;
+}
+
 export interface OpenPosition {
   contractId: string;
   size: number; // positive = long, negative = short (we negate short internally)
@@ -200,10 +238,56 @@ export class ProjectXClient {
   }
 
   /**
+   * Place a single order with retry logic (up to maxAttempts).
+   * Throws if all attempts fail.
+   */
+  private async placeOrderWithRetry(
+    label: string,
+    orderBody: Record<string, unknown>,
+    maxAttempts = 3
+  ): Promise<void> {
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const resp = await this.request<{ orderId?: number; success: boolean; errorCode?: number; errorMessage?: string }>(
+          "POST",
+          "/api/Order/place",
+          orderBody
+        );
+        if (resp.success !== true) {
+          throw new Error(
+            `Order rejected (code=${resp.errorCode ?? "n/a"}): ${resp.errorMessage ?? "no message"}`
+          );
+        }
+        if (!resp.orderId) {
+          throw new Error("Order appeared to succeed but broker returned no orderId");
+        }
+        logger.debug({ label, attempt, orderId: resp.orderId }, "Order placed successfully");
+        return;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const willRetry = attempt < maxAttempts;
+        logger.warn(
+          { err: lastError.message, label, attempt, maxAttempts, willRetry },
+          `Order placement attempt ${attempt} failed${willRetry ? " — retrying" : " — giving up"}`
+        );
+        if (willRetry) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        }
+      }
+    }
+    throw lastError ?? new Error(`${label} failed after ${maxAttempts} attempts`);
+  }
+
+  /**
    * Place a bracket order: market entry + stop loss + take profit(s).
    *
    * API OrderSide: 0 = Bid (Buy), 1 = Ask (Sell)
    * OrderType:     1 = Limit, 2 = Market, 4 = Stop
+   *
+   * SL and TP orders are retried up to 3 times each. If they fail after all
+   * retries, the error is logged with full detail and rethrown so callers can
+   * emit alerts.
    */
   async placeBracketOrder(params: {
     contractId: string;
@@ -238,17 +322,18 @@ export class ProjectXClient {
     );
 
     if (!entryResponse.success) {
-      throw new Error(`Entry order failed (${entryResponse.errorCode}): ${entryResponse.errorMessage}`);
+      // Entry was rejected by the broker — no position was opened
+      throw new EntryOrderError(
+        `Entry order failed (${entryResponse.errorCode}): ${entryResponse.errorMessage}`
+      );
     }
 
     const entryOrderId = String(entryResponse.orderId);
     logger.info({ entryOrderId }, "Entry order placed, attaching SL/TP");
 
-    // 2. Stop loss
-    await this.request(
-      "POST",
-      "/api/Order/place",
-      {
+    // 2. Stop loss — retried up to 3 times
+    try {
+      await this.placeOrderWithRetry("SL", {
         accountId: this.accountId,
         contractId: params.contractId,
         type: 4, // Stop
@@ -258,15 +343,24 @@ export class ProjectXClient {
         stopPrice: params.stopPrice,
         trailPrice: null,
         customTag: `dtr_sl_${Date.now()}`,
-      }
-    );
+      });
+      logger.info({ entryOrderId, stopPrice: params.stopPrice }, "Stop loss order placed");
+    } catch (err) {
+      logger.error(
+        { err, entryOrderId, contractId: params.contractId, stopPrice: params.stopPrice },
+        "ALERT: Stop loss placement failed after all retries — position is UNPROTECTED"
+      );
+      // Entry filled; throw BracketOrderError so callers can still persist trade state
+      throw new BracketOrderError(
+        `SL placement failed after all retries (entryOrderId=${entryOrderId})`,
+        entryOrderId
+      );
+    }
 
-    // 3. TP1 limit order
+    // 3. TP1 limit order — retried up to 3 times
     const tp1Qty = params.tp2Price && params.qty > 1 ? Math.ceil(params.qty / 2) : params.qty;
-    await this.request(
-      "POST",
-      "/api/Order/place",
-      {
+    try {
+      await this.placeOrderWithRetry("TP1", {
         accountId: this.accountId,
         contractId: params.contractId,
         type: 1, // Limit
@@ -276,16 +370,25 @@ export class ProjectXClient {
         stopPrice: null,
         trailPrice: null,
         customTag: `dtr_tp1_${Date.now()}`,
-      }
-    );
+      });
+      logger.info({ entryOrderId, tp1Price: params.tp1Price }, "TP1 limit order placed");
+    } catch (err) {
+      logger.error(
+        { err, entryOrderId, contractId: params.contractId, tp1Price: params.tp1Price },
+        "ALERT: TP1 placement failed after all retries — take profit not set"
+      );
+      // Entry filled (SL already placed); throw BracketOrderError so caller still persists trade
+      throw new BracketOrderError(
+        `TP1 placement failed after all retries (entryOrderId=${entryOrderId})`,
+        entryOrderId
+      );
+    }
 
-    // 4. TP2 limit order (optional, remaining qty)
+    // 4. TP2 limit order (optional, remaining qty) — retried up to 3 times
     if (params.tp2Price && params.qty > 1) {
       const tp2Qty = Math.floor(params.qty / 2);
-      await this.request(
-        "POST",
-        "/api/Order/place",
-        {
+      try {
+        await this.placeOrderWithRetry("TP2", {
           accountId: this.accountId,
           contractId: params.contractId,
           type: 1, // Limit
@@ -295,12 +398,69 @@ export class ProjectXClient {
           stopPrice: null,
           trailPrice: null,
           customTag: `dtr_tp2_${Date.now()}`,
-        }
-      );
+        });
+        logger.info({ entryOrderId, tp2Price: params.tp2Price }, "TP2 limit order placed");
+      } catch (err) {
+        logger.error(
+          { err, entryOrderId, contractId: params.contractId, tp2Price: params.tp2Price },
+          "ALERT: TP2 placement failed after all retries"
+        );
+        // TP2 failure is non-fatal — position still has SL and TP1
+      }
     }
 
     logger.info({ entryOrderId }, "Bracket order fully placed");
     return { orderId: entryOrderId, status: "placed" };
+  }
+
+  /**
+   * Place a standalone SL (stop) order with retry.
+   * Used by the self-healing bracket check and manual bracket override.
+   */
+  async placeStopOrder(params: {
+    contractId: string;
+    isBuy: boolean;
+    qty: number;
+    stopPrice: number;
+    tag?: string;
+  }): Promise<void> {
+    const closeSide = params.isBuy ? 1 : 0;
+    await this.placeOrderWithRetry(`SL-heal-${params.contractId}`, {
+      accountId: this.accountId,
+      contractId: params.contractId,
+      type: 4,
+      side: closeSide,
+      size: params.qty,
+      limitPrice: null,
+      stopPrice: params.stopPrice,
+      trailPrice: null,
+      customTag: params.tag ?? `dtr_sl_heal_${Date.now()}`,
+    });
+  }
+
+  /**
+   * Place a standalone TP (limit) order with retry.
+   * Used by the self-healing bracket check and manual bracket override.
+   */
+  async placeLimitOrder(params: {
+    contractId: string;
+    isBuy: boolean;
+    qty: number;
+    limitPrice: number;
+    tag?: string;
+  }): Promise<void> {
+    const closeSide = params.isBuy ? 1 : 0;
+    await this.placeOrderWithRetry(`TP-heal-${params.contractId}`, {
+      accountId: this.accountId,
+      contractId: params.contractId,
+      type: 1,
+      side: closeSide,
+      size: params.qty,
+      limitPrice: params.limitPrice,
+      stopPrice: null,
+      trailPrice: null,
+      customTag: params.tag ?? `dtr_tp_heal_${Date.now()}`,
+    });
   }
 
   /**
@@ -377,6 +537,55 @@ export class ProjectXClient {
       );
       logger.info({ contractId, size: pos.size }, "Fallback close order placed");
     }
+  }
+
+  /**
+   * Get all open orders for the account.
+   * Returns orders with status 1 (Open) or 6 (Pending).
+   */
+  async getOpenOrders(): Promise<BrokerOrder[]> {
+    const response = await this.request<{
+      orders: Array<{
+        id: number;
+        contractId: string;
+        type: number;
+        side: number;
+        size: number;
+        limitPrice: number | null;
+        stopPrice: number | null;
+        status: number;
+        customTag: string | null;
+      }>;
+    }>(
+      "POST",
+      "/api/Order/searchOpen",
+      { accountId: this.accountId }
+    );
+    return (response.orders || [])
+      .filter((o) => o.status === 1 || o.status === 6)
+      .map((o) => ({
+        id: o.id,
+        contractId: o.contractId,
+        type: o.type,
+        side: o.side,
+        size: o.size,
+        limitPrice: o.limitPrice ?? null,
+        stopPrice: o.stopPrice ?? null,
+        status: o.status,
+        customTag: o.customTag ?? null,
+      }));
+  }
+
+  /**
+   * Cancel a specific order by ID.
+   */
+  async cancelOrder(orderId: number): Promise<void> {
+    await this.request(
+      "POST",
+      "/api/Order/cancel",
+      { accountId: this.accountId, orderId }
+    );
+    logger.debug({ orderId }, "Order cancelled");
   }
 
   /**

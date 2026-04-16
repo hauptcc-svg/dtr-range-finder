@@ -271,6 +271,57 @@ router.post("/agent/settings", requireAgentKeyOrSession, (req: Request, res: Res
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/agent/orders — returns open broker orders keyed by symbol
+// No auth required — read-only market data
+// ---------------------------------------------------------------------------
+router.get("/agent/orders", async (_req, res): Promise<void> => {
+  const ordersBySymbol = await agentController.getOpenOrdersBySymbol();
+  res.json(ordersBySymbol);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/agent/positions/:contractId/bracket
+// Cancel existing bracket orders and place new ones at provided prices.
+// Accepts contractId (broker ID) or symbol (e.g. "MNQM6") — resolves either.
+// ---------------------------------------------------------------------------
+router.post("/agent/positions/:contractId/bracket", requireAgentKeyOrSession, async (req: Request, res: Response): Promise<void> => {
+  const contractIdOrSymbol = (req.params["contractId"] as string).toUpperCase();
+  const body = req.body as Record<string, unknown>;
+
+  const stopPrice = Number(body.stopPrice);
+  const tp1Price = Number(body.tp1Price);
+  const tp2Price = body.tp2Price != null ? Number(body.tp2Price) : null;
+
+  if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
+    res.status(400).json({ error: "stopPrice must be a positive number" });
+    return;
+  }
+  if (!Number.isFinite(tp1Price) || tp1Price <= 0) {
+    res.status(400).json({ error: "tp1Price must be a positive number" });
+    return;
+  }
+  if (tp2Price !== null && (!Number.isFinite(tp2Price) || tp2Price <= 0)) {
+    res.status(400).json({ error: "tp2Price must be a positive number when provided" });
+    return;
+  }
+
+  // Resolve to symbol: try direct match, then look up by contractId
+  const symbols = agentController.getInstrumentSymbols();
+  let symbol = symbols.find((s) => s === contractIdOrSymbol);
+  if (!symbol) {
+    // Try to find by resolving contractId -> symbol
+    symbol = agentController.getSymbolByContractId(contractIdOrSymbol);
+  }
+  if (!symbol) {
+    res.status(404).json({ error: `No instrument found for contractId/symbol "${contractIdOrSymbol}"` });
+    return;
+  }
+
+  const result = await agentController.updatePositionBracket(symbol, { stopPrice, tp1Price, tp2Price });
+  res.status(result.success ? 200 : 400).json(result);
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/agent/liquidate — immediately close all open positions
 // ---------------------------------------------------------------------------
 router.post("/agent/liquidate", requireAgentKeyOrSession, async (_req, res): Promise<void> => {

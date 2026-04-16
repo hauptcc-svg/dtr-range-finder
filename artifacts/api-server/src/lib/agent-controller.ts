@@ -9,7 +9,7 @@
  */
 
 import { logger } from "./logger";
-import { getProjectXClient, type ProjectXClient, type OpenPosition } from "./projectx-client";
+import { getProjectXClient, type ProjectXClient, type OpenPosition, type BrokerOrder, type OrderResult, EntryOrderError, BracketOrderError } from "./projectx-client";
 import { TRADING_CONFIG, isInTimeWindow, currentNYDate, currentNYDayOfWeek, todayAtNY } from "./trading-config";
 import {
   computeRange,
@@ -82,6 +82,14 @@ class AgentController {
   // Previous position cache snapshot for detecting closes and reading realizedPnl
   private previousPositionsCache: OpenPosition[] = [];
   private lastPositionFetch = 0;
+  // Cache of open broker orders (for self-healing bracket check and /api/agent/orders endpoint)
+  private openOrdersCache: BrokerOrder[] = [];
+  private lastOrderFetch = 0;
+  // TTL dedup for healing attempts: Map<contractId:sl|tp, timestamp of last attempt>
+  // Prevents duplicate placements during the ~30s window before broker order propagates.
+  // Entries expire after HEAL_DEDUP_TTL_MS — so externally canceled orders re-trigger healing.
+  private healLastAttempt: Map<string, number> = new Map();
+  private readonly HEAL_DEDUP_TTL_MS = 90_000; // 3 ticks
   // Runtime enabled/disabled overrides per instrument (persists until process restart)
   private instrumentEnabledOverrides: Map<string, boolean> = new Map();
   // Claude Autonomous Mode — bypasses all DTR rules, Claude decides freely
@@ -654,6 +662,8 @@ class AgentController {
         state.positionDirection = decision.action as "long" | "short";
         state.positionQty = config.qty;
         state.positionEntryPrice = price;
+        state.positionStopPrice = stopPrice;
+        state.positionTp1Price = tp1Price;
         state.positionOpenedAt = new Date().toISOString();
         state.openTradeId = trade.id;
         state.todayTrades++;
@@ -816,6 +826,8 @@ class AgentController {
           state.positionDirection = decision.action as "long" | "short";
           state.positionQty = config.qty;
           state.positionEntryPrice = price;
+          state.positionStopPrice = stopPrice;
+          state.positionTp1Price = tp1Price;
           state.positionOpenedAt = new Date().toISOString();
           state.openTradeId = trade.id;
           state.todayTrades++;
@@ -954,6 +966,8 @@ class AgentController {
         state.positionDirection = decision.action as "long" | "short";
         state.positionQty = config.qty;
         state.positionEntryPrice = entryPrice;
+        state.positionStopPrice = stopPrice;
+        state.positionTp1Price = tp1Price;
         state.positionOpenedAt = new Date().toISOString();
         state.openTradeId = trade.id;
         state.todayTrades++;
@@ -1226,6 +1240,343 @@ class AgentController {
     }
   }
 
+  /**
+   * Returns the cached open broker orders. If the agent is running, triggers a fresh fetch.
+   * Keyed internally by contractId; callers can cross-reference by symbol using instrumentStates.
+   */
+  async getOpenOrders(): Promise<BrokerOrder[]> {
+    if (this.client) {
+      try {
+        this.openOrdersCache = await this.client.getOpenOrders();
+        this.lastOrderFetch = Date.now();
+      } catch (err) {
+        logger.warn({ err }, "Failed to fetch open broker orders — returning cache");
+      }
+    }
+    return this.openOrdersCache;
+  }
+
+  /**
+   * Returns the cached open orders keyed by symbol (for the API endpoint).
+   * Each symbol maps to an array of BrokerOrder objects for that instrument.
+   */
+  async getOpenOrdersBySymbol(): Promise<Record<string, BrokerOrder[]>> {
+    const orders = await this.getOpenOrders();
+    const result: Record<string, BrokerOrder[]> = {};
+
+    // Build a reverse map: contractId → symbol
+    const contractToSymbol = new Map<string, string>();
+    for (const [symbol, state] of this.instrumentStates) {
+      if (state.contractId) {
+        contractToSymbol.set(state.contractId, symbol);
+      }
+    }
+
+    for (const order of orders) {
+      const symbol = contractToSymbol.get(order.contractId);
+      if (symbol) {
+        if (!result[symbol]) result[symbol] = [];
+        result[symbol].push(order);
+      }
+    }
+    return result;
+  }
+
+  /** Returns all known instrument symbols (e.g. ["MYMM6", "MNQM6", ...]) */
+  getInstrumentSymbols(): string[] {
+    return Array.from(this.instrumentStates.keys());
+  }
+
+  /** Reverse-lookup: given a broker contractId, return the trading symbol or undefined */
+  getSymbolByContractId(contractId: string): string | undefined {
+    for (const [symbol, state] of this.instrumentStates) {
+      if (state.contractId === contractId) return symbol;
+    }
+    return undefined;
+  }
+
+  /**
+   * Cancel all existing bracket (SL/TP) orders for a position and place new ones
+   * at the provided prices. Used by the manual bracket override endpoint.
+   */
+  async updatePositionBracket(
+    symbol: string,
+    params: { stopPrice: number; tp1Price: number; tp2Price?: number | null }
+  ): Promise<{ success: boolean; message: string }> {
+    const state = this.instrumentStates.get(symbol);
+    if (!state?.contractId) {
+      return { success: false, message: `No contract ID for ${symbol} — agent may not be running` };
+    }
+    if (!this.client) {
+      return { success: false, message: "Agent is not running" };
+    }
+    if (!state.inPosition) {
+      return { success: false, message: `No open position for ${symbol}` };
+    }
+
+    try {
+      // Fetch current open orders for this contract
+      const allOrders = await this.client.getOpenOrders();
+      const contractOrders = allOrders.filter(
+        (o) => o.contractId === state.contractId && (o.type === 1 || o.type === 4)
+      );
+
+      // Cancel all existing SL and TP orders
+      for (const order of contractOrders) {
+        try {
+          await this.client.cancelOrder(order.id);
+          logger.info({ orderId: order.id, type: order.type }, "Cancelled bracket order for override");
+        } catch (err) {
+          logger.warn({ err, orderId: order.id }, "Failed to cancel bracket order during override");
+        }
+      }
+
+      // Small delay to allow cancellations to settle
+      await new Promise((r) => setTimeout(r, 300));
+
+      const isBuy = state.positionDirection === "long";
+      const qty = state.positionQty;
+
+      // Place new SL
+      await this.client.placeStopOrder({
+        contractId: state.contractId,
+        isBuy,
+        qty,
+        stopPrice: params.stopPrice,
+        tag: `dtr_sl_override_${Date.now()}`,
+      });
+
+      // Split qty consistently with placeBracketOrder:
+      // if TP2 is provided and qty > 1: TP1 = ceil(qty/2), TP2 = floor(qty/2)
+      // otherwise TP1 gets the full qty so total exit qty always equals position qty.
+      const hasTP2 = !!params.tp2Price && qty > 1;
+      const tp1Qty = hasTP2 ? Math.ceil(qty / 2) : qty;
+
+      // Place new TP1
+      await this.client.placeLimitOrder({
+        contractId: state.contractId,
+        isBuy,
+        qty: tp1Qty,
+        limitPrice: params.tp1Price,
+        tag: `dtr_tp1_override_${Date.now()}`,
+      });
+
+      // Place new TP2 (optional, remaining qty)
+      if (hasTP2 && params.tp2Price) {
+        const tp2Qty = Math.floor(qty / 2);
+        await this.client.placeLimitOrder({
+          contractId: state.contractId,
+          isBuy,
+          qty: tp2Qty,
+          limitPrice: params.tp2Price,
+          tag: `dtr_tp2_override_${Date.now()}`,
+        });
+      }
+
+      // Update DB trade record with new SL/TP prices
+      if (state.openTradeId) {
+        await db
+          .update(tradesTable)
+          .set({
+            stopPrice: params.stopPrice,
+            tp1Price: params.tp1Price,
+            tp2Price: params.tp2Price ?? null,
+          })
+          .where(eq(tradesTable.id, state.openTradeId));
+      }
+
+      // Sync in-memory prices so healer uses the overridden levels if brackets go missing again
+      state.positionStopPrice = params.stopPrice;
+      state.positionTp1Price = params.tp1Price;
+
+      // Clear TTL dedup for this contract so healer re-validates immediately on next tick
+      if (state.contractId) {
+        this.healLastAttempt.delete(`${state.contractId}:sl`);
+        this.healLastAttempt.delete(`${state.contractId}:tp`);
+      }
+
+      logger.info({ symbol, params }, "Bracket orders updated via manual override");
+      return { success: true, message: `Bracket orders updated for ${symbol}` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err, symbol }, "Failed to update bracket orders");
+      return { success: false, message: `Failed to update brackets for ${symbol}: ${msg}` };
+    }
+  }
+
+  /**
+   * Self-healing bracket check: for each open position, verify that SL and TP
+   * orders exist in the broker's open order list. If missing, re-place them
+   * using prices from the DB open trade record.
+   * Skips positions that have already been healed this session to avoid duplicates.
+   */
+  private async healMissingBrackets(): Promise<void> {
+    if (!this.client || this.openPositionsCache.length === 0) return;
+
+    try {
+      this.openOrdersCache = await this.client.getOpenOrders();
+      this.lastOrderFetch = Date.now();
+    } catch (err) {
+      logger.warn({ err }, "healMissingBrackets: failed to fetch open orders — skipping");
+      return;
+    }
+
+    for (const pos of this.openPositionsCache) {
+      if (pos.size === 0) continue;
+
+      // Find the instrument state for this contractId
+      const symbolEntry = Array.from(this.instrumentStates.entries()).find(
+        ([, s]) => s.contractId === pos.contractId
+      );
+      if (!symbolEntry) continue;
+      const [symbol, state] = symbolEntry;
+
+      // Only heal positions the agent explicitly knows are open.
+      // This prevents acting on stale cache entries for recently-closed positions
+      // (the position cache is refreshed every 60s, so it can lag).
+      if (!state.inPosition) continue;
+
+      // Determine closing direction for tighter SL/TP detection
+      const isLong = pos.size > 0;
+      const closeSide = isLong ? 1 : 0; // 1 = Ask (sell to close long), 0 = Bid (buy to close short)
+
+      // Identify bracket orders: must be on the correct closing side for this position
+      const posOrders = this.openOrdersCache.filter((o) => o.contractId === pos.contractId && o.side === closeSide);
+      const hasSL = posOrders.some((o) => o.type === 4); // Stop on closing side
+      const hasTP = posOrders.some((o) => o.type === 1); // Limit on closing side
+
+      if (hasSL && hasTP) continue; // fully bracketed — nothing to do this tick
+
+      // TTL dedup: skip sides that were already attempted within HEAL_DEDUP_TTL_MS.
+      // This prevents duplicate orders during the ~30s broker propagation window.
+      // After TTL expires, missing sides re-trigger healing (handles external cancels).
+      const now = Date.now();
+      const slKey = `${pos.contractId}:sl`;
+      const tpKey = `${pos.contractId}:tp`;
+      const skipSL = !hasSL && (now - (this.healLastAttempt.get(slKey) ?? 0) < this.HEAL_DEDUP_TTL_MS);
+      const skipTP = !hasTP && (now - (this.healLastAttempt.get(tpKey) ?? 0) < this.HEAL_DEDUP_TTL_MS);
+      if (skipSL && skipTP) continue; // both missing but both within TTL — skip this tick
+
+      // --- Resolve SL/TP prices with three-tier priority ---
+      let stopPrice: number | null = null;
+      let tp1Price: number | null = null;
+
+      // Priority 1: in-memory prices stored at trade entry (most reliable, no network call)
+      stopPrice = state.positionStopPrice ?? null;
+      tp1Price  = state.positionTp1Price  ?? null;
+
+      // Priority 2: DB trade record (needed when agent restarted mid-trade)
+      if ((!stopPrice || !tp1Price) && state.openTradeId) {
+        try {
+          const [trade] = await db
+            .select()
+            .from(tradesTable)
+            .where(eq(tradesTable.id, state.openTradeId))
+            .limit(1);
+          if (trade) {
+            stopPrice = stopPrice ?? trade.stopPrice;
+            tp1Price  = tp1Price  ?? trade.tp1Price;
+          }
+        } catch (dbErr) {
+          logger.warn({ dbErr, symbol }, "healMissingBrackets: DB lookup failed, falling through to computed fallback");
+        }
+      }
+
+      // Priority 3: strategy-specific computed fallback (last resort)
+      if (!stopPrice || !tp1Price) {
+        const config = this.getEffectiveConfig(symbol);
+        const isBuyFallback = pos.size > 0;
+
+        if (config && state.positionEntryPrice) {
+          if (config.strategyMode === "dtr" && state.rangeData) {
+            // DTR: range low/high as SL, extend 50% of range width for TP
+            stopPrice = stopPrice ?? (isBuyFallback
+              ? state.rangeData.low
+              : state.rangeData.high);
+            tp1Price = tp1Price ?? (isBuyFallback
+              ? state.rangeData.high + state.rangeData.width * 0.5
+              : state.rangeData.low - state.rangeData.width * 0.5);
+          } else if (config.strategyMode === "atr_pullback") {
+            // ATR Pullback: reconstruct from entry price using the ATR-derived
+            // stop distances stored in state. If not available, fall back to
+            // the same 0.5%-of-price stopDist the live entry uses when ATR is unset.
+            // The DB record (priority 2 above) is the normal path for ATR trades.
+            if (state.positionStopPrice !== null) {
+              stopPrice = stopPrice ?? state.positionStopPrice;
+            }
+            if (state.positionTp1Price !== null) {
+              tp1Price = tp1Price ?? state.positionTp1Price;
+            }
+            if (!stopPrice || !tp1Price) {
+              const stopDist = state.positionEntryPrice * 0.005;
+              stopPrice = stopPrice ?? (isBuyFallback
+                ? state.positionEntryPrice - stopDist
+                : state.positionEntryPrice + stopDist);
+              tp1Price = tp1Price ?? (isBuyFallback
+                ? state.positionEntryPrice + stopDist * 2
+                : state.positionEntryPrice - stopDist * 2);
+            }
+          }
+        }
+      }
+
+      if (!stopPrice || !tp1Price) {
+        logger.warn({ symbol, contractId: pos.contractId }, "healMissingBrackets: no prices available for healing — will retry next tick");
+        continue;
+      }
+
+      const isBuy = pos.size > 0;
+      const qty = Math.abs(pos.size);
+
+      logger.warn(
+        { symbol, contractId: pos.contractId, hasSL, hasTP, stopPrice, tp1Price },
+        "healMissingBrackets: OPEN POSITION MISSING BRACKET — placing missing orders"
+      );
+
+      this.sendTelegram(
+        `⚠️ <b>BRACKET HEAL</b> · DeclanCapital FX\n\n` +
+        `<b>${symbol}</b> is missing bracket orders\n` +
+        `<b>Has SL:</b> ${hasSL ? "✓" : "✗"}\n` +
+        `<b>Has TP:</b> ${hasTP ? "✓" : "✗"}\n` +
+        `Re-placing missing orders…\n` +
+        `<i>${new Date().toUTCString()}</i>`
+      ).catch(() => {});
+
+      const attemptTs = Date.now();
+      try {
+        if (!hasSL && !skipSL) {
+          await this.client.placeStopOrder({
+            contractId: pos.contractId,
+            isBuy,
+            qty,
+            stopPrice,
+            tag: `dtr_sl_heal_${attemptTs}`,
+          });
+          // Record successful placement timestamp — prevents duplicate for HEAL_DEDUP_TTL_MS
+          this.healLastAttempt.set(slKey, attemptTs);
+          logger.info({ symbol, stopPrice }, "healMissingBrackets: SL order placed");
+        }
+        if (!hasTP && !skipTP) {
+          await this.client.placeLimitOrder({
+            contractId: pos.contractId,
+            isBuy,
+            qty,
+            limitPrice: tp1Price,
+            tag: `dtr_tp_heal_${attemptTs}`,
+          });
+          // Record successful placement timestamp
+          this.healLastAttempt.set(tpKey, attemptTs);
+          logger.info({ symbol, tp1Price }, "healMissingBrackets: TP order placed");
+        }
+      } catch (err) {
+        // Also record failed attempt to prevent rapid-fire retries in the same TTL window
+        if (!hasSL && !skipSL) this.healLastAttempt.set(slKey, attemptTs);
+        if (!hasTP && !skipTP) this.healLastAttempt.set(tpKey, attemptTs);
+        logger.error({ err, symbol }, "healMissingBrackets: failed to place healing orders — will retry after TTL");
+      }
+    }
+  }
+
   private async resolveContractIds(): Promise<void> {
     if (!this.client) return;
     // DB is sole source of truth — only resolve IDs for DB-configured instruments
@@ -1411,6 +1762,10 @@ class AgentController {
         });
       }
 
+      this.openOrdersCache = [];
+      this.lastOrderFetch = 0;
+      this.healLastAttempt.clear();
+
       await this.loadDailySummary();
     }
   }
@@ -1520,6 +1875,11 @@ class AgentController {
       }
     }
 
+    // Self-healing bracket check — runs every tick when positions are open
+    if (this.openPositionsCache.length > 0) {
+      await this.healMissingBrackets();
+    }
+
     // --- CLAUDE AUTONOMOUS MODE: bypass all DTR rules ---
     if (this.claudeAutonomousMode) {
       this.sessionPhase = "idle"; // phase not meaningful in this mode
@@ -1599,15 +1959,39 @@ class AgentController {
 
         logger.info({ symbol, signal }, "ATR Pullback signal detected, placing order");
 
-        const orderResult = await this.client.placeBracketOrder({
-          contractId: state.contractId,
-          isBuy: signal.direction === "long",
-          qty: config.qty,
-          stopPrice: signal.stopPrice,
-          tp1Price: signal.tp1Price,
-        });
+        // Phase 1: entry + bracket, with two-phase failure handling
+        let atrOrderResult: OrderResult | null = null;
+        let atrBracketFailed = false;
+        try {
+          atrOrderResult = await this.client.placeBracketOrder({
+            contractId: state.contractId,
+            isBuy: signal.direction === "long",
+            qty: config.qty,
+            stopPrice: signal.stopPrice,
+            tp1Price: signal.tp1Price,
+          });
+        } catch (bracketErr) {
+          if (bracketErr instanceof BracketOrderError) {
+            // Entry confirmed filled; bracket failed — track for healer
+            atrBracketFailed = true;
+            atrOrderResult = { orderId: bracketErr.entryOrderId, status: "bracket_failed" };
+            logger.error({ bracketErr, symbol }, "ALERT: ATR entry filled but bracket failed — tracking for healer");
+            this.sendTelegram(
+              `🚨 <b>BRACKET FAILURE</b> · DeclanCapital FX\n\n` +
+              `<b>${symbol}</b> ATR entry filled but SL/TP failed\n` +
+              `Position tracked — healer will re-place brackets on next tick\n` +
+              `<i>${new Date().toUTCString()}</i>`
+            ).catch(() => {});
+          } else {
+            // EntryOrderError OR network/transport error — no fill, abort without state mutation
+            logger.error({ bracketErr, symbol }, "ATR entry failed or errored — no position opened, aborting signal");
+            continue;
+          }
+        }
 
-        // Record in DB
+        if (!atrOrderResult) continue;
+
+        // Phase 2: record in DB + update state (even on bracket-only failure)
         const [trade] = await db
           .insert(tradesTable)
           .values({
@@ -1624,7 +2008,7 @@ class AgentController {
             stopPrice: signal.stopPrice,
             tp1Price: signal.tp1Price,
             tp2Price: null,
-            projectxOrderId: orderResult.orderId,
+            projectxOrderId: atrOrderResult.orderId,
             strategy: "dtr", // tagged "dtr" because this is a rule-based strategy (not Claude)
           })
           .returning();
@@ -1633,12 +2017,16 @@ class AgentController {
         state.positionDirection = signal.direction;
         state.positionQty = config.qty;
         state.positionEntryPrice = signal.entryPrice;
+        state.positionStopPrice = signal.stopPrice;
+        state.positionTp1Price = signal.tp1Price;
         state.positionOpenedAt = new Date().toISOString();
         state.openTradeId = trade.id;
         state.todayTrades++;
 
         this.tradeCount++;
         await this.updateDailySummary();
+
+        if (atrBracketFailed) continue; // state tracked; healer handles brackets
 
         this.sendTelegram(
           `📈 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
@@ -1730,17 +2118,42 @@ class AgentController {
 
         logger.info({ symbol, signal }, "Entry signal detected, placing order");
 
-        // Place bracket order
-        const orderResult = await this.client.placeBracketOrder({
-          contractId: state.contractId,
-          isBuy: signal.direction === "long",
-          qty: config.qty,
-          stopPrice: signal.stopPrice,
-          tp1Price: signal.tp1Price,
-          tp2Price: signal.tp2Price,
-        });
+        // Phase 1: place entry + bracket, detect entry-only vs bracket-only failures
+        let orderResult: OrderResult | null = null;
+        let bracketFailed = false;
+        try {
+          orderResult = await this.client.placeBracketOrder({
+            contractId: state.contractId,
+            isBuy: signal.direction === "long",
+            qty: config.qty,
+            stopPrice: signal.stopPrice,
+            tp1Price: signal.tp1Price,
+            tp2Price: signal.tp2Price,
+          });
+        } catch (bracketErr) {
+          if (bracketErr instanceof BracketOrderError) {
+            // Entry market order confirmed filled; bracket (SL/TP) placement failed.
+            // Track the position so the healer can re-place brackets on the next tick.
+            bracketFailed = true;
+            orderResult = { orderId: bracketErr.entryOrderId, status: "bracket_failed" };
+            logger.error({ bracketErr, symbol }, "ALERT: Entry filled but bracket failed — tracking for healer");
+            this.sendTelegram(
+              `🚨 <b>BRACKET FAILURE</b> · DeclanCapital FX\n\n` +
+              `<b>${symbol}</b> entry filled but SL/TP placement failed\n` +
+              `Position is tracked — healer will re-place brackets on next tick\n` +
+              `<i>${new Date().toUTCString()}</i>`
+            ).catch(() => {});
+          } else {
+            // EntryOrderError (broker rejection) OR any network/transport error:
+            // in both cases no position was opened — abort without any state mutation.
+            logger.error({ bracketErr, symbol }, "Entry order failed or errored — no position opened, aborting signal");
+            continue;
+          }
+        }
 
-        // Record trade in DB
+        if (!orderResult) continue;
+
+        // Phase 2: record in DB + update state (runs even when bracket partially failed)
         const [trade] = await db
           .insert(tradesTable)
           .values({
@@ -1767,12 +2180,17 @@ class AgentController {
         state.positionDirection = signal.direction;
         state.positionQty = config.qty;
         state.positionEntryPrice = signal.entryPrice;
+        state.positionStopPrice = signal.stopPrice;
+        state.positionTp1Price = signal.tp1Price;
         state.positionOpenedAt = new Date().toISOString();
         state.openTradeId = trade.id;
         state.todayTrades++;
 
+        // Always count the trade and update daily summary (bracket failure = trade still entered)
         this.tradeCount++;
         await this.updateDailySummary();
+
+        if (bracketFailed) continue; // State + counters recorded; healer handles brackets
 
         this.sendTelegram(
           `📈 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
@@ -1856,6 +2274,8 @@ class AgentController {
         state.positionDirection = null;
         state.positionQty = 0;
         state.positionEntryPrice = null;
+        state.positionStopPrice = null;
+        state.positionTp1Price = null;
         state.positionOpenedAt = null;
         state.openTradeId = null;
       } catch (err) {
@@ -1959,6 +2379,8 @@ class AgentController {
           state.positionDirection = null;
           state.positionQty = 0;
           state.positionEntryPrice = null;
+          state.positionStopPrice = null;
+          state.positionTp1Price = null;
           state.positionOpenedAt = null;
           state.openTradeId = null;
         }

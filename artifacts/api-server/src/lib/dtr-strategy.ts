@@ -52,6 +52,10 @@ export interface InstrumentState {
   positionEntryPrice: number | null;
   positionOpenedAt: string | null;
   openTradeId: number | null;
+  /** Actual SL price used when entering the position — used by bracket healer */
+  positionStopPrice: number | null;
+  /** Actual TP1 price used when entering the position — used by bracket healer */
+  positionTp1Price: number | null;
 }
 
 /**
@@ -194,5 +198,7 @@ export function createInstrumentState(symbol: string): InstrumentState {
     positionEntryPrice: null,
     positionOpenedAt: null,
     openTradeId: null,
+    positionStopPrice: null,
+    positionTp1Price: null,
   };
 }
