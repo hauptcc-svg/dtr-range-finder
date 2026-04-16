@@ -32,6 +32,14 @@ function Router() {
   );
 }
 
+// Redirect root visits to the Flask autonomous trading app
+if (
+  typeof window !== "undefined" &&
+  (window.location.pathname === "/" || window.location.pathname === "")
+) {
+  window.location.replace("/dtr-python");
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
