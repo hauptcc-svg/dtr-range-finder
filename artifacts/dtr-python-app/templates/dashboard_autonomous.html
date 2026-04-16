@@ -538,9 +538,14 @@
             🔍 ANALYSE CURRENT SETUP
         </button>
         <div class="analyse-result" id="analyse-result">
-            <div class="analyse-result-title">📋 Analysis Result</div>
-            <div id="analyse-decisions"></div>
-            <div id="analyse-summary" class="analyse-reasoning" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(14,165,233,0.1)"></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                <div class="analyse-result-title" style="margin-bottom:0">📋 Analysis Result</div>
+                <button id="btn-collapse" onclick="toggleAnalysis()" style="background:none;border:1px solid rgba(14,165,233,0.3);color:#0ea5e9;font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer">▲ Collapse</button>
+            </div>
+            <div id="analyse-body">
+                <div id="analyse-decisions"></div>
+                <div id="analyse-summary" class="analyse-reasoning" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(14,165,233,0.1)"></div>
+            </div>
         </div>
     </div>
 
@@ -736,6 +741,16 @@ async function switchMode(mode) {
 }
 
 // ─── Claude analysis ─────────────────────────────────────────────────────────
+let analyseCollapsed = false;
+
+function toggleAnalysis() {
+    const body = document.getElementById('analyse-body');
+    const btn = document.getElementById('btn-collapse');
+    analyseCollapsed = !analyseCollapsed;
+    body.style.display = analyseCollapsed ? 'none' : 'block';
+    btn.textContent = analyseCollapsed ? '▼ Expand' : '▲ Collapse';
+}
+
 async function runAnalysis() {
     const btn = document.getElementById('btn-analyse');
     const resultDiv = document.getElementById('analyse-result');
@@ -746,35 +761,47 @@ async function runAnalysis() {
         const data = await apiFetch('/api/claude/analyse', { method: 'POST' });
         btn.disabled = false;
         btn.innerHTML = '🔍 ANALYSE CURRENT SETUP';
+
+        // Show panel (and uncollapse)
         resultDiv.classList.add('visible');
+        analyseCollapsed = false;
+        document.getElementById('analyse-body').style.display = 'block';
+        document.getElementById('btn-collapse').textContent = '▲ Collapse';
 
         const decisionsEl = document.getElementById('analyse-decisions');
         const summaryEl = document.getElementById('analyse-summary');
 
-        // Try to render decisions from the response
-        const decisions = data.decisions || data.trades || [];
+        // Response shape: { success, advice: { decisions[], summary, model }, tradesPlaced[], message }
+        const advice = data.advice || {};
+        const decisions = advice.decisions || [];
+
         if (Array.isArray(decisions) && decisions.length > 0) {
             decisionsEl.innerHTML = decisions.map(d => {
-                const act = (d.action || d.decision || 'skip').toLowerCase();
+                const act = (d.action || 'skip').toLowerCase();
                 const cls = act === 'long' ? 'decision-long' : act === 'short' ? 'decision-short' : act === 'close' ? 'decision-close' : 'decision-skip';
-                return `<div class="decision-row">
-                    <span class="decision-symbol">${d.symbol || d.instrument || ''}</span>
-                    <span class="decision-badge ${cls}">${act.toUpperCase()}</span>
+                const reasoning = d.reasoning ? `<div class="analyse-reasoning" style="margin-top:4px;font-size:11px">${escHtml(d.reasoning)}</div>` : '';
+                return `<div class="decision-row" style="flex-direction:column;align-items:flex-start;gap:2px">
+                    <div style="display:flex;justify-content:space-between;width:100%">
+                        <span class="decision-symbol">${escHtml(d.symbol || '')}</span>
+                        <span class="decision-badge ${cls}">${act.toUpperCase()}</span>
+                    </div>
+                    ${reasoning}
                 </div>`;
             }).join('');
         } else {
-            // If no structured decisions, show a placed/skipped summary
-            const placed = data.tradesPlaced || data.placed || 0;
-            const skipped = data.skipped || 0;
-            decisionsEl.innerHTML = `<div class="decision-row"><span class="decision-symbol">Result</span><span style="color:#00ff88">${placed} trade(s) placed${skipped ? ', ' + skipped + ' skipped' : ''}</span></div>`;
+            const placed = Array.isArray(data.tradesPlaced) ? data.tradesPlaced.length : 0;
+            decisionsEl.innerHTML = `<div class="decision-row"><span class="decision-symbol">Result</span><span style="color:#00ff88">${placed} trade(s) placed</span></div>`;
         }
 
-        summaryEl.textContent = data.reasoning || data.summary || data.message || '';
+        summaryEl.textContent = advice.summary || data.message || '';
     } catch(e) {
         btn.disabled = false;
         btn.innerHTML = '🔍 ANALYSE CURRENT SETUP';
         resultDiv.classList.add('visible');
-        document.getElementById('analyse-decisions').innerHTML = '<div style="color:#ef4444">Error: ' + e.message + '</div>';
+        analyseCollapsed = false;
+        document.getElementById('analyse-body').style.display = 'block';
+        document.getElementById('btn-collapse').textContent = '▲ Collapse';
+        document.getElementById('analyse-decisions').innerHTML = '<div style="color:#ef4444">Error: ' + escHtml(e.message) + '</div>';
         document.getElementById('analyse-summary').textContent = '';
     }
 }
@@ -841,6 +868,8 @@ async function closePosition(symbol, btn) {
 let tradesPage = 1;
 const PAGE_SIZE = 15;
 let totalTrades = 0;
+// Keyed by trade id — avoids XSS from embedding JSON in onclick attributes
+const tradesById = {};
 
 async function loadTrades() {
     try {
@@ -853,7 +882,7 @@ async function loadTrades() {
         document.getElementById('btn-prev').disabled = tradesPage <= 1;
         document.getElementById('btn-next').disabled = tradesPage >= totalPages;
     } catch(e) {
-        document.getElementById('trades-tbody').innerHTML = '<tr><td colspan="10" class="empty-state">Error loading trades: ' + e.message + '</td></tr>';
+        document.getElementById('trades-tbody').innerHTML = '<tr><td colspan="10" class="empty-state">Error loading trades: ' + escHtml(e.message) + '</td></tr>';
     }
 }
 
@@ -871,9 +900,15 @@ function renderStats(stats) {
 }
 
 function renderTrades(trades) {
+    // Rebuild in-memory map (safe lookup for journal, avoids inline JSON/XSS)
+    Object.keys(tradesById).forEach(k => delete tradesById[k]);
+    trades.forEach(t => { tradesById[t.id] = t; });
+
     const tbody = document.getElementById('trades-tbody');
     if (!trades || trades.length === 0) {
         tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No trades recorded yet</td></tr>';
+        // Attach delegation listener on table (safe: no user data in markup)
+        attachJournalListener();
         return;
     }
     let html = '';
@@ -884,18 +919,21 @@ function renderTrades(trades) {
         const dateStr = t.entryTime ? new Date(t.entryTime).toLocaleString('en-US', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
         const statusClass = t.status === 'open' ? 'status-open' : 'status-closed';
         const showJournal = t.status === 'closed';
-        const journalIcon = showJournal ? `<button class="btn-journal ${t.notes ? 'has-notes' : ''}" onclick='openJournal(${JSON.stringify(t)})' title="${t.notes ? 'View/edit notes' : 'Add note'}">📝</button>` : '';
+        // Safe: only the numeric id is embedded via data attribute — no user content
+        const journalIcon = showJournal
+            ? `<button class="btn-journal ${t.notes ? 'has-notes' : ''}" data-trade-id="${t.id}" title="${t.notes ? 'View/edit notes' : 'Add note'}">📝</button>`
+            : '';
 
         html += `<tr>
-            <td class="td-mono" style="white-space:nowrap;font-size:11px">${dateStr}</td>
-            <td class="td-mono">${t.instrument}</td>
-            <td class="${dirClass}">${(t.direction||'').toUpperCase()}</td>
+            <td class="td-mono" style="white-space:nowrap;font-size:11px">${escHtml(dateStr)}</td>
+            <td class="td-mono">${escHtml(t.instrument)}</td>
+            <td class="${dirClass}">${escHtml((t.direction||'').toUpperCase())}</td>
             <td>${t.qty ?? '—'}</td>
             <td class="td-right td-mono">${fmtP(t.entryPrice)}</td>
             <td class="td-right td-mono">${t.exitPrice != null ? fmtP(t.exitPrice) : '—'}</td>
-            <td class="td-right td-mono ${pnlClass}">${pnlText}</td>
-            <td style="font-size:11px;color:#666">${t.session || '—'}</td>
-            <td class="${statusClass}" style="font-size:11px">${(t.status||'').toUpperCase()}</td>
+            <td class="td-right td-mono ${pnlClass}">${escHtml(pnlText)}</td>
+            <td style="font-size:11px;color:#666">${escHtml(t.session || '—')}</td>
+            <td class="${statusClass}" style="font-size:11px">${escHtml((t.status||'').toUpperCase())}</td>
             <td>${journalIcon}</td>
         </tr>`;
 
@@ -904,6 +942,21 @@ function renderTrades(trades) {
         }
     });
     tbody.innerHTML = html;
+    attachJournalListener();
+}
+
+// Single delegated event listener — attaches once per render, replaces any prior one
+let _journalListenerAttached = false;
+function attachJournalListener() {
+    const tbody = document.getElementById('trades-tbody');
+    if (_journalListenerAttached) return;
+    _journalListenerAttached = true;
+    tbody.addEventListener('click', function(e) {
+        const btn = e.target.closest('[data-trade-id]');
+        if (!btn) return;
+        const trade = tradesById[btn.dataset.tradeId];
+        if (trade) openJournal(trade);
+    });
 }
 
 function escHtml(s) {
