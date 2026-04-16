@@ -148,6 +148,7 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
             "auto_executing": auto_exec,
             "monitor_interval": 30,
             "position_limits": POSITION_LIMITS,
+            "trade_count": trade_count,
         },
         "trading": {
             "mode": mode_raw,
@@ -338,10 +339,19 @@ def get_trades():
 @app.route("/api/trades/<int:trade_id>/notes", methods=["PATCH"])
 def patch_trade_notes(trade_id: int):
     data = request.json or {}
-    resp = _ts_patch(f"/trades/{trade_id}/notes", data)
-    if isinstance(resp, dict) and not resp.get("success") and "error" in resp:
-        return jsonify(resp), 502
-    return jsonify(resp)
+    try:
+        r = requests.patch(
+            f"{TS_API}/api/trades/{trade_id}/notes",
+            json=data,
+            headers=_agent_headers(),
+            timeout=10,
+        )
+        body = r.json() if r.content else {}
+        status = r.status_code if r.status_code != 200 else 200
+        return jsonify(body), status
+    except Exception as e:
+        logger.error(f"TS API PATCH /api/trades/{trade_id}/notes failed: {e}")
+        return jsonify({"success": False, "error": str(e)}), 502
 
 
 # ═══════════════════════════════════════════════════════════════════════════

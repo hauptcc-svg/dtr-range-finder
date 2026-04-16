@@ -683,7 +683,9 @@ async function updateDashboard() {
         const descs = { dtr: '🔄 Auto-executing on DTR stage 5', claude: '🧠 Auto-executing on Claude signals', halted: '⏹ Trading halted' };
         document.getElementById('mode-description').textContent = descs[mode] || mode;
 
-        document.getElementById('daily-trades').textContent = '0/4';
+        const tradeCount = data.orchestrator.trade_count || 0;
+        document.getElementById('daily-trades').textContent = `${tradeCount}/4`;
+        document.getElementById('trades-detail').textContent = `Trades today: ${tradeCount}`;
         document.getElementById('last-update').textContent = new Date(data.timestamp).toLocaleTimeString();
 
         const pl = data.p_and_l || {};
@@ -960,7 +962,8 @@ function attachJournalListener() {
 }
 
 function escHtml(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    if (s == null) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function changePage(dir) {
