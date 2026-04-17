@@ -1223,7 +1223,9 @@ class AgentController {
   }
 
   getInstrumentStatuses(): InstrumentStatusData[] {
-    return Array.from(this.instrumentStates.values()).map((state) => {
+    return Array.from(this.instrumentStates.values())
+      .filter((state) => this.dbConfigs.has(state.symbol))
+      .map((state) => {
       const config = this.getEffectiveConfig(state.symbol);
       // Find matching open position from cache
       const openPos = this.openPositionsCache.find(
