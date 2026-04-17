@@ -1,4 +1,11 @@
-import { useGetPositions, getGetPositionsQueryKey, useClosePosition } from "@workspace/api-client-react";
+import {
+  useGetPositions,
+  getGetPositionsQueryKey,
+  useClosePosition,
+  useGetInstruments,
+  getGetInstrumentsQueryKey,
+  RbsStageSnapshot,
+} from "@workspace/api-client-react";
 import { formatCurrency, formatPrice, formatDate } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -16,6 +23,31 @@ import { cn } from "@/lib/utils";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useState, Fragment } from "react";
 import { X, AlertTriangle, Check, Pencil } from "lucide-react";
+
+const RBS_STAGE_LABELS: Record<number, string> = {
+  0: "Waiting for sweep",
+  1: "Swept",
+  2: "Bias candle fired",
+  3: "Retest pending",
+};
+
+function rbsStageBadge(
+  snapshot: RbsStageSnapshot | null | undefined,
+  direction: "long" | "short"
+): { label: string; colorClass: string } {
+  if (!snapshot) return { label: "—", colorClass: "text-muted-foreground" };
+  const stage = direction === "long" ? snapshot.longStage : snapshot.shortStage;
+  const pending = direction === "long" ? snapshot.longPending : snapshot.shortPending;
+  const fired = direction === "long" ? snapshot.longSignalFired : snapshot.shortSignalFired;
+  if (fired || pending) return { label: "Signal active", colorClass: "text-yellow-400" };
+  switch (stage) {
+    case 0: return { label: RBS_STAGE_LABELS[0], colorClass: "text-muted-foreground" };
+    case 1: return { label: RBS_STAGE_LABELS[1], colorClass: "text-blue-400" };
+    case 2: return { label: RBS_STAGE_LABELS[2], colorClass: "text-orange-400" };
+    case 3: return { label: RBS_STAGE_LABELS[3], colorClass: "text-purple-400" };
+    default: return { label: String(stage), colorClass: "text-muted-foreground" };
+  }
+}
 
 interface BrokerOrder {
   id: number;
@@ -62,6 +94,11 @@ export function Positions() {
   const { data: positions, isLoading } = useGetPositions({
     query: { queryKey: getGetPositionsQueryKey(), refetchInterval: 3000 }
   });
+
+  const { data: instruments } = useGetInstruments({
+    query: { queryKey: getGetInstrumentsQueryKey(), refetchInterval: 5000 }
+  });
+  const instrumentMap = Object.fromEntries((instruments ?? []).map((i) => [i.symbol, i]));
 
   const { data: brokerOrders, isLoading: ordersLoading, isError: ordersError } = useQuery({
     queryKey: ["broker-orders"],
@@ -189,6 +226,8 @@ export function Positions() {
                   <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-right text-success/50">TP2</TableHead>
                   <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-right">UNREALIZED PNL</TableHead>
                   <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">OPENED</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">RBS LON</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">RBS NY</TableHead>
                   <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-center">ACTIONS</TableHead>
                 </TableRow>
               </TableHeader>
@@ -196,12 +235,12 @@ export function Positions() {
                 {isLoading ? (
                   Array(3).fill(0).map((_, i) => (
                     <TableRow key={i} className="border-border">
-                      <TableCell colSpan={11}><Skeleton className="h-8 w-full" /></TableCell>
+                      <TableCell colSpan={13}><Skeleton className="h-8 w-full" /></TableCell>
                     </TableRow>
                   ))
                 ) : !positions || positions.length === 0 ? (
                   <TableRow className="border-border hover:bg-transparent">
-                    <TableCell colSpan={11} className="h-24 text-center text-muted-foreground font-mono text-sm">
+                    <TableCell colSpan={13} className="h-24 text-center text-muted-foreground font-mono text-sm">
                       No open positions at this time.
                     </TableCell>
                   </TableRow>
@@ -213,6 +252,10 @@ export function Positions() {
                     // Only flag as missing when we have confirmed order data (not loading/error/degraded)
                     const bracketMissing = !ordersUnavailable && (!hasSL || !hasTP);
                     const isEditing = editingSymbol === position.instrument;
+
+                    const instrStatus = instrumentMap[position.instrument];
+                    const lonBadge = rbsStageBadge(instrStatus?.rbsLondon, position.direction);
+                    const nyBadge = rbsStageBadge(instrStatus?.rbsNy, position.direction);
 
                     return (
                       <Fragment key={position.instrument}>
@@ -280,6 +323,12 @@ export function Positions() {
                           <TableCell className="font-mono text-xs text-muted-foreground">
                             {formatDate(position.openedAt)}
                           </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <span className={cn("font-medium", lonBadge.colorClass)}>{lonBadge.label}</span>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            <span className={cn("font-medium", nyBadge.colorClass)}>{nyBadge.label}</span>
+                          </TableCell>
                           <TableCell className="text-center">
                             <div className="flex items-center gap-1 justify-center">
                               <Button
@@ -322,7 +371,7 @@ export function Positions() {
 
                         {isEditing && (
                           <TableRow key={`${position.instrument}-edit`} className="border-border bg-muted/20">
-                            <TableCell colSpan={11} className="py-3 px-4">
+                            <TableCell colSpan={13} className="py-3 px-4">
                               <div className="flex items-end gap-3 flex-wrap">
                                 <div className="flex flex-col gap-1">
                                   <label className="font-mono text-[10px] text-destructive/70 uppercase tracking-wider">Stop Loss</label>
