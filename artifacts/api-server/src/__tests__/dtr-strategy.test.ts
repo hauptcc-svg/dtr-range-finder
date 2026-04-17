@@ -25,6 +25,7 @@ import {
   stepLongMachine,
   computeAtr14,
   buildRbsSession,
+  roundToTick,
 } from "../lib/dtr-strategy.js";
 
 import type { Bar } from "../lib/projectx-client.js";
@@ -1030,5 +1031,102 @@ describe("CSV bar replay — TradingView alert cross-check (NQ 2AM 2025-04-17)",
     );
     assert.equal(result.shortMachine.slSource, tvAlerts.alert.slSource,
       `slSource must match alert fixture (${tvAlerts.alert.slSource})`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST SUITE: roundToTick — edge-case coverage
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// roundToTick(price, tickSize) = Math.round(price / tickSize) * tickSize
+//
+// tick=0.25 values are exact in IEEE 754 (0.25 = 1/4, a power-of-two fraction)
+// so assert.equal is used directly.  tick=0.01 values use an epsilon check
+// because 0.01 is not representable exactly in binary floating point.
+
+describe("roundToTick — tick=0.25 (ES-futures style)", () => {
+  test("price already on a tick boundary is unchanged (5.25)", () => {
+    assert.equal(roundToTick(5.25, 0.25), 5.25);
+  });
+
+  test("price already on a tick boundary is unchanged (5.0)", () => {
+    assert.equal(roundToTick(5.0, 0.25), 5.0);
+  });
+
+  test("price below midpoint rounds DOWN to nearest tick (5.1 → 5.0)", () => {
+    // 5.1 / 0.25 = 20.4  →  Math.round(20.4) = 20  →  20 × 0.25 = 5.0
+    assert.equal(roundToTick(5.1, 0.25), 5.0);
+  });
+
+  test("price above midpoint rounds UP to nearest tick (5.2 → 5.25)", () => {
+    // 5.2 / 0.25 = 20.8  →  Math.round(20.8) = 21  →  21 × 0.25 = 5.25
+    assert.equal(roundToTick(5.2, 0.25), 5.25);
+  });
+
+  test("price exactly at half-tick midpoint rounds UP (5.125 → 5.25, JS Math.round ties go up)", () => {
+    // 5.125 / 0.25 = 20.5  →  Math.round(20.5) = 21  →  21 × 0.25 = 5.25
+    assert.equal(roundToTick(5.125, 0.25), 5.25);
+  });
+});
+
+describe("roundToTick — tick=0.01 (sub-cent / penny tick)", () => {
+  const eps = 1e-9;
+
+  test("price on tick boundary is unchanged (1.23 → 1.23)", () => {
+    const result = roundToTick(1.23, 0.01);
+    assert.ok(
+      Math.abs(result - 1.23) < eps,
+      `expected 1.23, got ${result}`,
+    );
+  });
+
+  test("price below midpoint rounds DOWN (1.234 → 1.23)", () => {
+    // 1.234 / 0.01 ≈ 123.4  →  Math.round(123.4) = 123  →  123 × 0.01 ≈ 1.23
+    const result = roundToTick(1.234, 0.01);
+    assert.ok(
+      Math.abs(result - 1.23) < eps,
+      `expected 1.23, got ${result}`,
+    );
+  });
+
+  test("price above midpoint rounds UP (1.236 → 1.24)", () => {
+    // 1.236 / 0.01 ≈ 123.6  →  Math.round(123.6) = 124  →  124 × 0.01 ≈ 1.24
+    const result = roundToTick(1.236, 0.01);
+    assert.ok(
+      Math.abs(result - 1.24) < eps,
+      `expected 1.24, got ${result}`,
+    );
+  });
+});
+
+describe("roundToTick — price = 0", () => {
+  test("zero price with tick=0.25 stays zero", () => {
+    assert.equal(roundToTick(0, 0.25), 0);
+  });
+
+  test("zero price with tick=0.01 stays zero", () => {
+    assert.ok(Math.abs(roundToTick(0, 0.01)) < 1e-9, "expected 0");
+  });
+});
+
+describe("roundToTick — negative prices (e.g. spread or inverted instrument)", () => {
+  test("exact negative tick boundary is unchanged (-5.25 → -5.25)", () => {
+    assert.equal(roundToTick(-5.25, 0.25), -5.25);
+  });
+
+  test("negative price below midpoint rounds toward zero (-5.1 → -5.0)", () => {
+    // -5.1 / 0.25 = -20.4  →  Math.round(-20.4) = -20  →  -20 × 0.25 = -5.0
+    assert.equal(roundToTick(-5.1, 0.25), -5.0);
+  });
+
+  test("negative price above midpoint (in magnitude) rounds away from zero (-5.2 → -5.25)", () => {
+    // -5.2 / 0.25 = -20.8  →  Math.round(-20.8) = -21  →  -21 × 0.25 = -5.25
+    assert.equal(roundToTick(-5.2, 0.25), -5.25);
+  });
+
+  test("negative half-tick midpoint rounds toward zero (JS ties go toward +Inf) (-5.125 → -5.0)", () => {
+    // -5.125 / 0.25 = -20.5  →  Math.round(-20.5) = -20  →  -20 × 0.25 = -5.0
+    // JS Math.round(-20.5) = -20  (rounds toward positive infinity at tie)
+    assert.equal(roundToTick(-5.125, 0.25), -5.0);
   });
 });
