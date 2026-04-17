@@ -74,11 +74,13 @@ CURRENT STATE OF INSTRUMENTS:
 ${instrumentBlocks}
 
 TASK: For each instrument listed above, decide whether to ENTER a trade RIGHT NOW or SKIP.
-Only recommend a trade if:
+Only recommend a trade if ALL of the following are true:
 1. There is a clear range established (rangeHigh and rangeLow are set)
-2. The current price is near or has broken out of the range boundary matching the bias direction
-3. The instrument is not already in a position
-4. The instrument has not exceeded its daily trade/loss limits
+2. A sweep beyond the range boundary has occurred in the bias direction
+3. A strong FVG bias candle has formed after the sweep (true price gap between bias candle and sweep bar)
+4. Price has retested the bias candle body (FVG zone) and a BOS has closed through it confirming entry
+5. The instrument is not already in a position
+6. The instrument has not exceeded its daily trade/loss limits
 
 Respond with a JSON object in this exact format (no markdown, no explanation outside the JSON):
 {
