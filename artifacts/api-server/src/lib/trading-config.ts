@@ -71,8 +71,8 @@ export const TRADING_CONFIG: TradingConfig = {
       strategyMode: "atr_pullback",
       sess2EntryEnd: "04:00",
     },
-    MCLK6: {
-      symbol: "MCLK6",
+    MCLM26: {
+      symbol: "MCLM26",
       name: "Micro Crude Oil",
       enabled: true,
       qty: 2,
