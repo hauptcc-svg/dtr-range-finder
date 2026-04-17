@@ -8,7 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx/esm src/__tests__/dtr-strategy.test.ts",
+    "test": "node --test --import tsx/esm src/__tests__/dtr-strategy.test.ts src/__tests__/dtr-strategy-integration.test.mjs src/__tests__/nq-2am-2025-04-17-replay.test.mjs",
     "replay:tv-trace": "node --import tsx/esm src/scripts/replay-tv-trace.ts"
   },
   "dependencies": {
