@@ -176,6 +176,14 @@
         .badge-long { background: rgba(16,185,129,0.2); color: #10b981; }
         .badge-short { background: rgba(239,68,68,0.2); color: #ef4444; }
         .badge-flat { background: rgba(100,100,100,0.2); color: #666; }
+        /* RBS stage display */
+        .rbs-stages { margin-top: 7px; display: flex; flex-direction: column; gap: 3px; }
+        .rbs-snap { display: flex; align-items: center; gap: 5px; }
+        .rbs-label { font-size: 10px; color: #888; min-width: 26px; font-weight: bold; }
+        .rbs-dir { font-size: 10px; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+        .rbs-stage-idle { background: rgba(100,100,100,0.15); color: #555; }
+        .rbs-stage-progress { background: rgba(234,179,8,0.15); color: #eab308; }
+        .rbs-stage-active { background: rgba(0,255,136,0.2); color: #00ff88; font-weight: bold; }
 
         /* ── Analyse button ── */
         .analyse-section { margin-bottom: 16px; }
@@ -1302,11 +1310,28 @@ async function updateInstruments() {
             const dayPnl = inst.todayPnl != null ? Number(inst.todayPnl) : null;
             const pnlClass = dayPnl > 0 ? 'positive' : dayPnl < 0 ? 'negative' : '';
             const pnlText = dayPnl != null ? (dayPnl >= 0 ? '+$' : '-$') + Math.abs(dayPnl).toFixed(2) : '—';
+            // RBS stage display (DTR instruments only)
+            const rbsLondon = inst.rbsLondon;
+            const rbsNy = inst.rbsNy;
+            const RBS_STAGE_LABELS = ['Idle', 'Swept', 'Bias ✓', 'Pending'];
+            function rbsBadge(snap, label) {
+                if (!snap) return '';
+                const sStage = snap.shortStage || 0, lStage = snap.longStage || 0;
+                const maxStage = Math.max(sStage, lStage);
+                const sLabel = RBS_STAGE_LABELS[sStage] || 'Idle';
+                const lLabel = RBS_STAGE_LABELS[lStage] || 'Idle';
+                const sClass = snap.shortPending || snap.shortSignalFired ? 'rbs-stage-active' : (sStage > 0 ? 'rbs-stage-progress' : 'rbs-stage-idle');
+                const lClass = snap.longPending || snap.longSignalFired ? 'rbs-stage-active' : (lStage > 0 ? 'rbs-stage-progress' : 'rbs-stage-idle');
+                return `<div class="rbs-snap"><span class="rbs-label">${label}</span><span class="rbs-dir ${sClass}">▼${sLabel}</span><span class="rbs-dir ${lClass}">▲${lLabel}</span></div>`;
+            }
+            const rbsHtml = (rbsLondon || rbsNy)
+                ? `<div class="rbs-stages">${rbsBadge(rbsLondon,'2AM')}${rbsBadge(rbsNy,'9AM')}</div>` : '';
             return `<div class="instrument-card ${hasPosClass}">
                 <div class="inst-symbol">${inst.symbol || inst.instrument || '—'}</div>
                 <div class="inst-price">${price}</div>
                 <div class="inst-pnl ${pnlClass}">Today: ${pnlText}</div>
                 <span class="inst-badge ${badgeClass}">${badgeText}</span>
+                ${rbsHtml}
             </div>`;
         }).join('');
     } catch(e) { console.error('instruments update failed', e); }

@@ -19,6 +19,7 @@ import {
   calculatePnl,
   type InstrumentState,
   type EntrySignal,
+  type RbsSessionResult,
 } from "./dtr-strategy";
 import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, type ClaudeAdvice } from "./claude-advisor";
 import { checkAtrPullbackSignal, DEFAULT_ATR_PULLBACK_PARAMS } from "./atr-pullback-strategy";
@@ -50,6 +51,16 @@ export interface AgentStatusData {
   lastClaudeAutonomousTick: string | null;
 }
 
+export interface RbsStageSnapshot {
+  /** 0=idle, 1=swept, 2=bias_candle, 3=retested/pending */
+  shortStage: number;
+  longStage: number;
+  shortPending: boolean;
+  longPending: boolean;
+  shortSignalFired: boolean;
+  longSignalFired: boolean;
+}
+
 export interface InstrumentStatusData {
   symbol: string;
   name: string;
@@ -66,6 +77,10 @@ export interface InstrumentStatusData {
   rangeHigh: number | null;
   rangeLow: number | null;
   lastPrice: number | null;
+  /** RBS state machine snapshot for the 2AM London session (null if not a DTR instrument or session not yet started) */
+  rbsLondon: RbsStageSnapshot | null;
+  /** RBS state machine snapshot for the 9AM NY session (null if not a DTR instrument or session not yet started) */
+  rbsNy: RbsStageSnapshot | null;
 }
 
 class AgentController {
@@ -146,8 +161,8 @@ class AgentController {
       strategyMode: dbRow.strategyMode as "dtr" | "atr_pullback",
       sessionStart: dbRow.sessionStart,
       sessionEnd: dbRow.sessionEnd,
-      // sess2EntryEnd is now a DB column; fall back to static config or default
-      sess2EntryEnd: (dbRow as any).sess2EntryEnd ?? staticCfg?.sess2EntryEnd ?? "04:00",
+      // sess2EntryEnd is a DB column (typed via Drizzle $inferSelect)
+      sess2EntryEnd: dbRow.sess2EntryEnd ?? staticCfg?.sess2EntryEnd ?? "04:00",
       // Strategy-specific fields not yet in DB — use static config if available, else defaults
       tp1Qty: staticCfg?.tp1Qty ?? 1,
       maxLossesPerDirection: staticCfg?.maxLossesPerDirection ?? 2,
@@ -157,7 +172,7 @@ class AgentController {
       londonRangeStart: staticCfg?.londonRangeStart ?? "01:12",
       londonRangeEnd: staticCfg?.londonRangeEnd ?? "02:13",
       londonEntryStart: "02:13",
-      londonEntryEnd: (dbRow as any).sess2EntryEnd ?? staticCfg?.sess2EntryEnd ?? "04:00",
+      londonEntryEnd: dbRow.sess2EntryEnd ?? staticCfg?.sess2EntryEnd ?? "04:00",
       nyRangeStart: staticCfg?.nyRangeStart ?? "08:12",
       nyRangeEnd: staticCfg?.nyRangeEnd ?? "09:13",
     };
@@ -732,6 +747,16 @@ class AgentController {
     // AUTONOMOUS MODE: fetch bars + use Claude's own strategy (no DTR context)
     // -------------------------------------------------------------------------
     if (this.claudeAutonomousMode) {
+      // Force-refresh open positions so Claude sees current position state (not stale 60s cache)
+      try {
+        this.previousPositionsCache = this.openPositionsCache;
+        this.openPositionsCache = await this.client.getOpenPositions(this.buildPointValueMap());
+        this.lastPositionFetch = Date.now();
+        await this.syncPositionStates();
+      } catch (err) {
+        logger.warn({ err }, "Position refresh before autonomous Claude analysis failed (non-fatal)");
+      }
+
       const windowEnd = new Date();
       const windowStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);
 
@@ -1222,6 +1247,18 @@ class AgentController {
         }
       }
 
+      const toRbsSnapshot = (r: RbsSessionResult | null): RbsStageSnapshot | null => {
+        if (!r) return null;
+        return {
+          shortStage: r.shortMachine.stage,
+          longStage: r.longMachine.stage,
+          shortPending: r.shortMachine.pending,
+          longPending: r.longMachine.pending,
+          shortSignalFired: r.shortSignal !== null,
+          longSignalFired: r.longSignal !== null,
+        };
+      };
+
       return {
         symbol: state.symbol,
         name: config?.name ?? state.symbol,
@@ -1238,6 +1275,8 @@ class AgentController {
         rangeHigh: state.rangeData?.high ?? null,
         rangeLow: state.rangeData?.low ?? null,
         lastPrice: state.lastPrice,
+        rbsLondon: toRbsSnapshot(state.rbs2),
+        rbsNy: toRbsSnapshot(state.rbs9),
       };
     });
   }
@@ -1752,8 +1791,81 @@ class AgentController {
 
       // Sync any broker-placed fills that aren't in the local DB
       await this.syncBrokerTrades();
+
+      // Backfill RBS stage state if we're already in a session window
+      // This ensures state.rbs2/rbs9 is populated immediately on restart (not after first tick)
+      await this.backfillRbsStageOnStartup();
     } catch (err) {
       logger.error({ err }, "Error during startup reconciliation");
+    }
+  }
+
+  /**
+   * Replays bars for all DTR instruments to populate rbs2/rbs9 snapshots on startup.
+   * Called once after reconcileOnStartup so the dashboard is never left blank on restart.
+   * Does NOT place any orders — purely informational bar replay.
+   */
+  private async backfillRbsStageOnStartup(): Promise<void> {
+    if (!this.client) return;
+    logger.info("Backfilling RBS stage state from historical bars");
+
+    // Determine which sessions to replay
+    const inLondon = isInTimeWindow("01:12", "08:00");
+    const inNy     = isInTimeWindow("08:00", "20:00");
+    if (!inLondon && !inNy) {
+      logger.info("Outside all session windows — skipping RBS backfill");
+      return;
+    }
+
+    const sessions: Array<"london" | "ny"> = [];
+    if (inLondon) sessions.push("london");
+    if (inNy)     sessions.push("ny");
+
+    for (const session of sessions) {
+      const rangeStartNY = session === "london" ? "01:12" : "08:12";
+      const rangeEndNY   = session === "london" ? "02:13" : "09:13";
+
+      for (const [symbol, state] of this.instrumentStates) {
+        const config = this.getEffectiveConfig(symbol);
+        if (!config || config.strategyMode === "atr_pullback") continue;
+        if (!state.contractId) continue;
+
+        const breakEndNY = session === "london"
+          ? (config.sess2EntryEnd ?? "04:00")
+          : (config.sessionEnd ?? "12:00");
+
+        try {
+          const rangeStartUtc = todayAtNY(rangeStartNY);
+          const nowUtc        = new Date();
+          const bars = await this.client.getBars(state.contractId, rangeStartUtc, nowUtc);
+          if (bars.length === 0) continue;
+
+          state.lastPrice = bars[bars.length - 1].c;
+          const rbsResult = buildRbsSession(
+            bars,
+            todayAtNY(rangeEndNY).getTime(),
+            todayAtNY(rangeEndNY).getTime(),
+            todayAtNY(breakEndNY).getTime(),
+            config.biasCandle_atrMult ?? 1.5,
+            config.slAtrBuffer ?? 0.0,
+            state.lastPrice,
+            config.minTick ?? 0.01,
+          );
+
+          if (rbsResult.rangeHigh && rbsResult.rangeLow) {
+            state.rangeData = { high: rbsResult.rangeHigh, low: rbsResult.rangeLow, timestamp: new Date().toISOString() };
+          }
+          if (session === "london") state.rbs2 = rbsResult;
+          else                      state.rbs9 = rbsResult;
+
+          logger.info(
+            { symbol, session, shortStage: rbsResult.shortMachine.stage, longStage: rbsResult.longMachine.stage },
+            "RBS stage backfilled on startup"
+          );
+        } catch (err) {
+          logger.warn({ err, symbol, session }, "Failed to backfill RBS stage (non-fatal)");
+        }
+      }
     }
   }
 
@@ -1941,7 +2053,7 @@ class AgentController {
     for (const row of this.dbConfigs.values()) {
       if (!row.enabled) continue;
       if (row.strategyMode === "atr_pullback") continue;
-      const s2 = (row as any).sess2EntryEnd ?? "04:00";
+      const s2 = row.sess2EntryEnd ?? "04:00";
       if (s2 > latest) latest = s2;
     }
     return latest;
