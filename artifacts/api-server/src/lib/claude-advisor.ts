@@ -113,7 +113,8 @@ function buildAutonomousPrompt(
   instruments: Array<{
     state: InstrumentState;
     config: InstrumentConfig;
-    recentBars: BarSnapshot[];
+    recentBars: BarSnapshot[];      // 5-minute bars — primary strategy timeframe
+    scalp1mBars: BarSnapshot[];     // 1-minute bars — scalp context only
     effectiveMaxTrades: number;
     effectiveMaxLossesPerDirection: number;
   }>,
@@ -124,25 +125,30 @@ function buildAutonomousPrompt(
   const remainingBudget = dailyLossLimit + dailyPnl;
 
   const instrumentBlocks = instruments
-    .map(({ state, config, recentBars, effectiveMaxTrades, effectiveMaxLossesPerDirection }) => {
-      const last30 = recentBars.slice(-30);
+    .map(({ state, config, recentBars, scalp1mBars, effectiveMaxTrades, effectiveMaxLossesPerDirection }) => {
+      const last50_5m = recentBars.slice(-50);
+      const last25_1m = scalp1mBars.slice(-25);
 
-      const barsText =
-        last30.length > 0
-          ? last30
-              .map(
-                (b) =>
-                  `  ${b.t.slice(11, 16)} O:${b.o} H:${b.h} L:${b.l} C:${b.c} V:${b.v}`
-              )
+      const bars5mText =
+        last50_5m.length > 0
+          ? last50_5m
+              .map((b) => `  ${b.t.slice(11, 16)} O:${b.o} H:${b.h} L:${b.l} C:${b.c} V:${b.v}`)
               .join("\n")
-          : "  (no bar data available)";
+          : "  (no 5m bar data available)";
 
-      // Derived stats from the bar window
-      const atr = last30.length >= 2 ? computeAtr(last30) : null;
-      const periodHigh = last30.length > 0 ? Math.max(...last30.map((b) => b.h)) : null;
-      const periodLow  = last30.length > 0 ? Math.min(...last30.map((b) => b.l)) : null;
-      const firstClose = last30[0]?.c;
-      const lastClose  = last30[last30.length - 1]?.c;
+      const bars1mText =
+        last25_1m.length > 0
+          ? last25_1m
+              .map((b) => `  ${b.t.slice(11, 16)} O:${b.o} H:${b.h} L:${b.l} C:${b.c} V:${b.v}`)
+              .join("\n")
+          : "  (no 1m bar data available)";
+
+      // Derived stats from the 5m bar window
+      const atr = last50_5m.length >= 2 ? computeAtr(last50_5m) : null;
+      const periodHigh = last50_5m.length > 0 ? Math.max(...last50_5m.map((b) => b.h)) : null;
+      const periodLow  = last50_5m.length > 0 ? Math.min(...last50_5m.map((b) => b.l)) : null;
+      const firstClose = last50_5m[0]?.c;
+      const lastClose  = last50_5m[last50_5m.length - 1]?.c;
       const trendDir =
         firstClose !== undefined && lastClose !== undefined
           ? lastClose > firstClose
@@ -158,9 +164,9 @@ function buildAutonomousPrompt(
 
       const statsText = [
         atr !== null ? `ATR(14): ${atr.toFixed(config.minTick < 0.1 ? 3 : 2)}` : null,
-        periodHigh !== null ? `30-bar High: ${periodHigh}` : null,
-        periodLow  !== null ? `30-bar Low:  ${periodLow}` : null,
-        `30-bar Trend: ${trendDir}`,
+        periodHigh !== null ? `5m-window High: ${periodHigh}` : null,
+        periodLow  !== null ? `5m-window Low:  ${periodLow}` : null,
+        `5m Trend: ${trendDir}`,
       ]
         .filter(Boolean)
         .join(" | ");
@@ -173,9 +179,11 @@ function buildAutonomousPrompt(
         `Long Losses   : ${state.longLosses} / ${effectiveMaxLossesPerDirection}`,
         `Short Losses  : ${state.shortLosses} / ${effectiveMaxLossesPerDirection}`,
         `Tick / Point  : ${config.minTick} tick | $${config.pointValue}/pt`,
-        `Stats         : ${statsText}`,
-        `Recent 1-min bars (oldest → newest):`,
-        barsText,
+        `Stats (5m)    : ${statsText}`,
+        `5-min bars — PRIMARY (oldest → newest, up to 50 bars):`,
+        bars5mText,
+        `1-min bars — SCALP CONTEXT (last 25 candles):`,
+        bars1mText,
       ].join("\n");
     })
     .join("\n\n");
@@ -188,7 +196,11 @@ ACCOUNT:
   Profit Target   : +$${dailyProfitTarget}
   Remaining Budget: $${remainingBudget.toFixed(2)}
 
-INSTRUMENTS (1-minute bars, last 30 candles):
+TIMEFRAME CONTEXT:
+  Primary (5m): Use the 5-minute bars for all macro structure, trend direction, swing highs/lows, and DTR/RBS confluence. This is your main decision frame.
+  Scalp (1m):   Use the 1-minute bars ONLY to pinpoint precise entries when a clean short-term setup (micro-BOS, exhaustion candle, tight range break) is visible and the 5m bias supports it. If you enter off the 1m view, include the word "scalp" prominently in your reasoning.
+
+INSTRUMENTS:
 ${instrumentBlocks}
 
 INSTRUCTIONS:
@@ -204,7 +216,7 @@ Rules you must obey:
 3. Never open a new trade if today's trade count is at the max.
 4. Only output "close" for instruments that have an open position.
 5. Only output "long"/"short" for instruments with no open position.
-6. Explain your market logic in the "reasoning" field (2-3 sentences, name the specific pattern/setup you see).
+6. Explain your market logic in the "reasoning" field (2-3 sentences, name the specific pattern/setup you see and the timeframe — 5m or 1m scalp — it comes from).
 
 Respond with ONLY this JSON — no markdown, no extra text:
 {
@@ -277,7 +289,8 @@ export async function getClaudeAutonomousAdvice(
   instruments: Array<{
     state: InstrumentState;
     config: InstrumentConfig;
-    recentBars: BarSnapshot[];
+    recentBars: BarSnapshot[];      // 5-minute bars — primary strategy timeframe
+    scalp1mBars: BarSnapshot[];     // 1-minute bars — scalp context
     effectiveMaxTrades: number;
     effectiveMaxLossesPerDirection: number;
   }>,

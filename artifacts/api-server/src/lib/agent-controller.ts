@@ -575,28 +575,41 @@ class AgentController {
 
     if (eligibleInstruments.length === 0) return;
 
-    // Fetch recent 1-min bars (last 30 min) + current price for each instrument
+    // Fetch 5-min bars (last 5 hours, up to 60 bars) for primary strategy analysis
+    // and 1-min bars (last 30 min, ~30 bars) for scalp context
     const windowEnd = new Date();
-    const windowStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);
+    const window5mStart = new Date(windowEnd.getTime() - 5 * 60 * 60 * 1000);  // 5 hours for 5m bars
+    const window1mStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);       // 30 min for 1m bars
 
     const instrumentsWithBars = await Promise.all(
       eligibleInstruments.map(async ({ state, config }) => {
         let recentBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
+        let scalp1mBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
         if (state.contractId && this.client) {
           try {
-            const bars = await this.client.getBars(state.contractId, windowStart, windowEnd);
-            recentBars = bars.map((b) => ({
+            const [bars5m, bars1m] = await Promise.all([
+              this.client.getBars(state.contractId, window5mStart, windowEnd, 5),
+              this.client.getBars(state.contractId, window1mStart, windowEnd, 1),
+            ]);
+            recentBars = bars5m.map((b) => ({
               t: new Date(b.t).toISOString(),
               o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
             }));
+            scalp1mBars = bars1m.map((b) => ({
+              t: new Date(b.t).toISOString(),
+              o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
+            }));
+            // Use most recent 5m close as last price (falls back to 1m if 5m unavailable)
             if (recentBars.length > 0) {
               state.lastPrice = recentBars[recentBars.length - 1].c;
+            } else if (scalp1mBars.length > 0) {
+              state.lastPrice = scalp1mBars[scalp1mBars.length - 1].c;
             }
           } catch (err) {
             logger.warn({ err, symbol: state.symbol }, "Failed to fetch bars for autonomous tick");
           }
         }
-        return { state, config, recentBars, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
+        return { state, config: config!, recentBars, scalp1mBars, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
       })
     );
 
@@ -660,6 +673,7 @@ class AgentController {
           tp1Price,
         });
 
+        const isScalp = /scalp/i.test(decision.reasoning ?? "");
         const [trade] = await db
           .insert(tradesTable)
           .values({
@@ -678,6 +692,7 @@ class AgentController {
             entryTime: new Date(),
             exitTime: null,
             strategy: "claude",
+            notes: isScalp ? "scalp" : null,
           })
           .returning();
 
@@ -693,7 +708,7 @@ class AgentController {
         this.tradeCount++;
 
         logger.info(
-          { symbol: decision.symbol, action: decision.action, price, reasoning: decision.reasoning },
+          { symbol: decision.symbol, action: decision.action, price, reasoning: decision.reasoning, isScalp },
           "Claude autonomous: trade placed"
         );
 
@@ -758,25 +773,40 @@ class AgentController {
         logger.warn({ err }, "Position refresh before autonomous Claude analysis failed (non-fatal)");
       }
 
+      // Fetch 5-min bars (last 5 hours) for primary strategy analysis
+      // and 1-min bars (last 30 min) for scalp context
       const windowEnd = new Date();
-      const windowStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);
+      const window5mStart = new Date(windowEnd.getTime() - 5 * 60 * 60 * 1000);
+      const window1mStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);
 
       const withBars = await Promise.all(
         eligibleInstruments.map(async ({ state, config }) => {
           let recentBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
+          let scalp1mBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
           if (state.contractId && this.client) {
             try {
-              const bars = await this.client.getBars(state.contractId, windowStart, windowEnd);
-              recentBars = bars.map((b) => ({
+              const [bars5m, bars1m] = await Promise.all([
+                this.client.getBars(state.contractId, window5mStart, windowEnd, 5),
+                this.client.getBars(state.contractId, window1mStart, windowEnd, 1),
+              ]);
+              recentBars = bars5m.map((b) => ({
                 t: new Date(b.t).toISOString(),
                 o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
               }));
-              if (recentBars.length > 0) state.lastPrice = recentBars[recentBars.length - 1].c;
+              scalp1mBars = bars1m.map((b) => ({
+                t: new Date(b.t).toISOString(),
+                o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
+              }));
+              if (recentBars.length > 0) {
+                state.lastPrice = recentBars[recentBars.length - 1].c;
+              } else if (scalp1mBars.length > 0) {
+                state.lastPrice = scalp1mBars[scalp1mBars.length - 1].c;
+              }
             } catch {
               // non-fatal
             }
           }
-          return { state, config, recentBars, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
+          return { state, config: config!, recentBars, scalp1mBars, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
         })
       );
 
@@ -836,6 +866,7 @@ class AgentController {
             tp1Price,
           });
 
+          const isScalp = /scalp/i.test(decision.reasoning ?? "");
           const [trade] = await db
             .insert(tradesTable)
             .values({
@@ -854,6 +885,7 @@ class AgentController {
               entryTime: new Date(),
               exitTime: null,
               strategy: "claude",
+              notes: isScalp ? "scalp" : null,
             })
             .returning();
 
@@ -869,7 +901,7 @@ class AgentController {
           this.tradeCount++;
 
           tradesPlaced.push(`${decision.symbol} ${decision.action.toUpperCase()}`);
-          logger.info({ symbol: decision.symbol, action: decision.action }, "Claude autonomous manual trade placed");
+          logger.info({ symbol: decision.symbol, action: decision.action, isScalp }, "Claude autonomous manual trade placed");
           this.sendTelegram(
             `🧠 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
             `<b>${config.name ?? decision.symbol}</b> (${decision.symbol})\n` +
@@ -1848,7 +1880,8 @@ class AgentController {
         try {
           const rangeStartUtc = todayAtNY(rangeStartNY);
           const nowUtc        = new Date();
-          const bars = await this.client.getBars(state.contractId, rangeStartUtc, nowUtc);
+          // 5-minute bars: RBS state machine runs on 5m timeframe
+          const bars = await this.client.getBars(state.contractId, rangeStartUtc, nowUtc, 5);
           if (bars.length === 0) continue;
 
           state.lastPrice = bars[bars.length - 1].c;
@@ -2358,7 +2391,8 @@ class AgentController {
         const startUtc = todayAtNY(rangeStart);
         const endUtc = todayAtNY(rangeEnd);
 
-        const bars = await this.client.getBars(state.contractId, startUtc, endUtc);
+        // 5-minute bars for DTR range computation
+        const bars = await this.client.getBars(state.contractId, startUtc, endUtc, 5);
         const rangeData = computeRange(bars);
 
         if (rangeData) {
@@ -2382,7 +2416,7 @@ class AgentController {
    * DTR Entry Phase — RBS + 3CR state machine.
    *
    * For each DTR instrument:
-   *   1. Fetch 1-min bars from range window start through now.
+   *   1. Fetch 5-min bars from range window start through now.
    *   2. Run RBS state machines (SHORT + LONG) over the break window bars.
    *   3. If BOS fired on the last bar (pending=true), place a bracket order.
    *
@@ -2416,10 +2450,10 @@ class AgentController {
       const effectiveMaxLossDir = this.effectiveMaxLossesPerDirection(symbol);
 
       try {
-        // Fetch all bars from range window start through now
+        // Fetch 5-min bars from range window start through now (RBS runs on 5m timeframe)
         const rangeStartUtc = todayAtNY(rangeStartNY);
         const nowUtc        = new Date();
-        const bars = await this.client.getBars(state.contractId, rangeStartUtc, nowUtc);
+        const bars = await this.client.getBars(state.contractId, rangeStartUtc, nowUtc, 5);
 
         if (bars.length === 0) continue;
 

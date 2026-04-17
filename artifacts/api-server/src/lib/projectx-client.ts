@@ -198,12 +198,14 @@ export class ProjectXClient {
   }
 
   /**
-   * Fetch 1-minute OHLCV bars for a contract
+   * Fetch OHLCV bars for a contract.
+   * @param unitNumber  Bar size in minutes: 1 = 1-minute bars (default), 5 = 5-minute bars.
    */
   async getBars(
     contractId: string,
     startTime: Date,
-    endTime: Date
+    endTime: Date,
+    unitNumber = 1
   ): Promise<Bar[]> {
     const response = await this.request<{ bars: Bar[] }>(
       "POST",
@@ -214,7 +216,7 @@ export class ProjectXClient {
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
         unit: 2, // minutes
-        unitNumber: 1,
+        unitNumber,
         limit: 500,
         includePartialBar: false,
       }
