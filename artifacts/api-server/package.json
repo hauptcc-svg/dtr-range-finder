@@ -8,7 +8,8 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx/esm src/__tests__/dtr-strategy.test.ts"
+    "test": "node --test --import tsx/esm src/__tests__/dtr-strategy.test.ts",
+    "replay:tv-trace": "node --import tsx/esm src/scripts/replay-tv-trace.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.89.0",

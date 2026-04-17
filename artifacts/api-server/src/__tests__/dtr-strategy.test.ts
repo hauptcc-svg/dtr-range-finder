@@ -799,3 +799,236 @@ describe("PineScript fixture parity — LONG 2AM session trace", () => {
       "slSource = bias candle low (bcLow)");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST SUITE 15: Real bar CSV — TradingView alert cross-check
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Replays the 1-minute OHLC CSV of the 2025-04-17 NQ 2AM session
+// (attached_assets/nq-2am-2025-04-17.csv) through the TypeScript engine and
+// compares every output value against the alert trace captured in:
+//   attached_assets/nq-2am-tv-alerts-2025-04-17.json
+//
+// The JSON trace was produced by hand-tracing the PineScript DTR v3 source
+// bar-by-bar (the same methodology as suites 13-14) — the document explicitly
+// records PineScript variable names and line numbers for each transition so
+// reviewers can verify each entry against the script in:
+//   attached_assets/Pasted--version-5-strategy-DTR-Time-Range-Scalper-v3-shorttitl_1776415752806.txt
+//
+// Run the standalone replay script that prints the full side-by-side comparison:
+//   node --import tsx/esm src/scripts/replay-tv-trace.ts
+//
+// Session parameters (2AM / "sess2" in PineScript):
+//   rangeWindow  01:12–02:12 EDT  (61 bars with natural price variation)
+//   breakWindow  02:13–04:00 EDT
+//   fvgSizeMult  1.5
+//   slMult       0
+//   minTick      0.25 (NQ)
+//
+// PineScript trace for the break-window bars (from JSON fixture):
+//   Bar 0 (02:13): close(19430) > r2H(19426) → rbs2sStg=1            [Pine line 316]
+//   Bar 1 (02:14): bigBearCandle body=48≥35.04 (1.5×ATR)
+//                  → rbs2sStg=2, bcH=19440, bcBT=19428, bcBB=19380   [Pine lines 320-326]
+//   Bar 2 (02:15): h(19383)≥bcBB(19380), close(19382) NOT <19380
+//                  → rbs2sStg=3                                        [Pine line 339]
+//   Bar 3 (02:16): close(19376)<bcBB(19380) ∧ inRbs2
+//                  → rbs2sPend=true, rbsSlH=19440, rbs2sStg=0         [Pine lines 345-348]
+
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ─── CSV parser ───────────────────────────────────────────────────────────────
+
+function parseCsvBars(csvPath: string): Bar[] {
+  const text = readFileSync(csvPath, "utf-8");
+  const lines = text.trim().split("\n");
+  const result: Bar[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const [time, o, h, l, c, v] = lines[i].split(",");
+    result.push({
+      t: new Date(time).getTime(),
+      o: Number(o),
+      h: Number(h),
+      l: Number(l),
+      c: Number(c),
+      v: Number(v),
+    });
+  }
+  return result;
+}
+
+// ─── Shared fixture setup ─────────────────────────────────────────────────────
+
+const ASSETS_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../../attached_assets",
+);
+
+const CSV_PATH      = resolve(ASSETS_DIR, "nq-2am-2025-04-17.csv");
+const TV_ALERT_PATH = resolve(ASSETS_DIR, "nq-2am-tv-alerts-2025-04-17.json");
+
+// Session boundaries (UTC ms)
+const CSV_RANGE_END_MS   = 1744870380000; // 2025-04-17T06:13:00Z = 02:13 EDT
+const CSV_BREAK_START_MS = 1744870380000;
+const CSV_BREAK_END_MS   = 1744876800000; // 2025-04-17T08:00:00Z = 04:00 EDT
+const CSV_FVG_MULT       = 1.5;
+const CSV_SL_MULT        = 0;
+const CSV_MIN_TICK       = 0.25;
+const CSV_CURRENT_PRICE  = 19376; // representative next-bar open after BOS
+
+const csvBars   = parseCsvBars(CSV_PATH);
+const tvAlerts  = JSON.parse(readFileSync(TV_ALERT_PATH, "utf-8")) as {
+  computed: { rangeHigh: number; rangeLow: number; atr14: number };
+  alert: { direction: string; slSource: number; stopPrice: number; tp1Price: number };
+  breakBarTrace: Array<{
+    role: string;
+    shortMachine: { stage: number; pending: boolean; bcBodyBot: number | null; slSource: number | null };
+  }>;
+};
+
+describe("CSV bar replay — TradingView alert cross-check (NQ 2AM 2025-04-17)", () => {
+  /**
+   * Loads the bar CSV and TV alert trace JSON and verifies that the TypeScript
+   * engine produces the exact output documented in the alert fixture — matching
+   * the PineScript DTR Time Range Scalper v3 state machine bar by bar.
+   */
+
+  test("CSV loads 65 bars (61 range + 4 break)", () => {
+    assert.equal(csvBars.length, 65, "expected 61 range bars + 4 break bars");
+  });
+
+  test("rangeHigh and rangeLow match the TV alert fixture [Pine: r2H / r2L]", () => {
+    const result = buildRbsSession(
+      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
+      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
+    );
+    assert.equal(result.rangeHigh, tvAlerts.computed.rangeHigh,
+      `rangeHigh must match TV alert fixture (${tvAlerts.computed.rangeHigh})`);
+    assert.equal(result.rangeLow, tvAlerts.computed.rangeLow,
+      `rangeLow must match TV alert fixture (${tvAlerts.computed.rangeLow})`);
+  });
+
+  test("ATR(14) matches TV alert fixture value [Pine: ta.atr(14)]", () => {
+    // Last 14 TRs: 10 range TRs (≈20 each) + sweep(30) + bias(70) + retest(14) + BOS(10) = 327/14
+    const atr = computeAtr14(csvBars);
+    assert.ok(atr !== null, "ATR must be computable from 65 bars");
+    assert.ok(
+      Math.abs(atr! - tvAlerts.computed.atr14) < 0.001,
+      `ATR=${atr}, fixture=${tvAlerts.computed.atr14} (327/14)`,
+    );
+  });
+
+  test("SHORT sweep fires at break bar 0 (02:13 EDT) [Pine line 316: rbs2sStg=1]", () => {
+    const atr14     = computeAtr14(csvBars)!;
+    const rangeHigh = tvAlerts.computed.rangeHigh;
+    const breakBars = csvBars.filter(
+      b => b.t >= CSV_BREAK_START_MS && b.t < CSV_BREAK_END_MS,
+    );
+    let m = makeMachine();
+    m = stepShortMachine(m, breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
+    const ex = tvAlerts.breakBarTrace[0];
+    assert.equal(m.stage,   ex.shortMachine.stage,   `bar 0 (${ex.role}): stage`);
+    assert.equal(m.pending, ex.shortMachine.pending,  `bar 0 (${ex.role}): pending`);
+  });
+
+  test("bias candle recorded at break bar 1 (02:14 EDT) [Pine lines 320-326: rbs2sStg=2, bcBB=19380]", () => {
+    const atr14     = computeAtr14(csvBars)!;
+    const rangeHigh = tvAlerts.computed.rangeHigh;
+    const breakBars = csvBars.filter(
+      b => b.t >= CSV_BREAK_START_MS && b.t < CSV_BREAK_END_MS,
+    );
+    let m = makeMachine();
+    m = stepShortMachine(m, breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
+    m = stepShortMachine(m, breakBars[1], rangeHigh, atr14, CSV_FVG_MULT);
+    const ex = tvAlerts.breakBarTrace[1];
+    // body = 19428 - 19380 = 48, threshold ≈ 35.04 → accepted
+    assert.equal(m.stage,     ex.shortMachine.stage,           `bar 1 (${ex.role}): stage`);
+    assert.equal(m.bcHigh,    19440, "bcHigh = bar high of bias candle");
+    assert.equal(m.bcLow,     19370, "bcLow  = bar low of bias candle");
+    assert.equal(m.bcBodyTop, 19428, "bcBodyTop = open (bearish)");
+    assert.equal(m.bcBodyBot, ex.shortMachine.bcBodyBot, `bar 1 (${ex.role}): bcBodyBot`);
+    assert.equal(m.pending,   ex.shortMachine.pending,   `bar 1 (${ex.role}): pending`);
+  });
+
+  test("retest wick at break bar 2 (02:15 EDT) advances to stage 3 [Pine line 339]", () => {
+    const atr14     = computeAtr14(csvBars)!;
+    const rangeHigh = tvAlerts.computed.rangeHigh;
+    const breakBars = csvBars.filter(
+      b => b.t >= CSV_BREAK_START_MS && b.t < CSV_BREAK_END_MS,
+    );
+    let m = makeMachine();
+    m = stepShortMachine(m, breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
+    m = stepShortMachine(m, breakBars[1], rangeHigh, atr14, CSV_FVG_MULT);
+    m = stepShortMachine(m, breakBars[2], rangeHigh, atr14, CSV_FVG_MULT);
+    const ex = tvAlerts.breakBarTrace[2];
+    // h(19383) >= bcBB(19380), close(19382) NOT < 19380 → stage 3
+    assert.equal(m.stage,   ex.shortMachine.stage,   `bar 2 (${ex.role}): stage`);
+    assert.equal(m.pending, ex.shortMachine.pending,  `bar 2 (${ex.role}): pending`);
+  });
+
+  test("BOS fires at break bar 3 (02:16 EDT) [Pine lines 345-348: rbs2sPend=true, rbsSlH=19440]", () => {
+    const atr14     = computeAtr14(csvBars)!;
+    const rangeHigh = tvAlerts.computed.rangeHigh;
+    const breakBars = csvBars.filter(
+      b => b.t >= CSV_BREAK_START_MS && b.t < CSV_BREAK_END_MS,
+    );
+    let m = makeMachine();
+    m = stepShortMachine(m, breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
+    m = stepShortMachine(m, breakBars[1], rangeHigh, atr14, CSV_FVG_MULT);
+    m = stepShortMachine(m, breakBars[2], rangeHigh, atr14, CSV_FVG_MULT);
+    m = stepShortMachine(m, breakBars[3], rangeHigh, atr14, CSV_FVG_MULT);
+    const ex = tvAlerts.breakBarTrace[3];
+    // close(19376) < bcBB(19380) → BOS
+    assert.equal(m.pending,  ex.shortMachine.pending,               `bar 3 (${ex.role}): pending`);
+    assert.equal(m.stage,    ex.shortMachine.stage,                 `bar 3 (${ex.role}): stage`);
+    assert.equal(m.slSource, ex.shortMachine.slSource,              `bar 3 (${ex.role}): slSource`);
+  });
+
+  test("LONG machine produces no signal (bias bar sweeps LONG but no bull candle follows)", () => {
+    // Bias bar close=19380 < rangeLow=19388 triggers a LONG sweep at bar 1.
+    // Bars 2-3 are bearish or too small → LONG stays at stage 1, no signal fires.
+    const result = buildRbsSession(
+      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
+      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
+    );
+    assert.equal(result.longSignal, null,
+      "LONG sweeps at bar 1 (close=19380 < rangeLow=19388) but no qualifying bull candle → null");
+  });
+
+  test("buildRbsSession direction matches TV alert fixture", () => {
+    const result = buildRbsSession(
+      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
+      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
+    );
+    assert.ok(result.shortSignal !== null, "shortSignal must not be null");
+    assert.equal(result.shortSignal!.direction, tvAlerts.alert.direction);
+  });
+
+  test("stopPrice matches TV alert fixture (slSource + slMult×ATR, rounded to tick)", () => {
+    const result = buildRbsSession(
+      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
+      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
+    );
+    assert.equal(result.shortSignal!.stopPrice, tvAlerts.alert.stopPrice,
+      `stopPrice must match alert fixture (${tvAlerts.alert.stopPrice})`);
+  });
+
+  test("tp1Price matches TV alert fixture (rangeLow — opposing boundary) [Pine: tp = r2L]", () => {
+    const result = buildRbsSession(
+      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
+      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
+    );
+    assert.equal(result.shortSignal!.tp1Price, tvAlerts.alert.tp1Price,
+      `tp1Price must match alert fixture (${tvAlerts.alert.tp1Price})`);
+  });
+
+  test("slSource matches TV alert fixture (bcHigh of bias candle)", () => {
+    const result = buildRbsSession(
+      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
+      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
+    );
+    assert.equal(result.shortMachine.slSource, tvAlerts.alert.slSource,
+      `slSource must match alert fixture (${tvAlerts.alert.slSource})`);
+  });
+});

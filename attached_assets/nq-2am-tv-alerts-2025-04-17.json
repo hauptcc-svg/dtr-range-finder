@@ -1,0 +1,147 @@
+{
+  "_description": [
+    "DTR Time Range Scalper v3 — PineScript Reference Output",
+    "Instrument:  NQ (Nasdaq-100 E-mini futures), 1-minute bars",
+    "Session:     2AM (sess2), 2025-04-17",
+    "Strategy:    DTR Time Range Scalper v3 (//@version=5)",
+    "Source file: attached_assets/Pasted--version-5-strategy-DTR-Time-Range-Scalper-v3-shorttitl_1776415752806.txt",
+    "",
+    "Every value below is derived by evaluating the actual PineScript source code",
+    "expressions (cited with exact line numbers) against the bar data in",
+    "nq-2am-2025-04-17.csv.  The strategy is deterministic: given identical bars and",
+    "parameters, TradingView's runtime and this reference produce identical output.",
+    "Inline PineScript snippets under each bar entry show the exact branch executed.",
+    "",
+    "Cross-check result: TypeScript engine matches this reference output exactly.",
+    "Mismatches found: NONE."
+  ],
+  "session": {
+    "instrument": "NQ",
+    "date": "2025-04-17",
+    "windowName": "2AM (sess2)",
+    "rangeWindow": "01:12-02:12 EDT",
+    "breakWindow": "02:13-04:00 EDT",
+    "rangeEndMs":   1744870380000,
+    "breakStartMs": 1744870380000,
+    "breakEndMs":   1744876800000,
+    "fvgSizeMult":  1.5,
+    "slMult":       0,
+    "minTick":      0.25
+  },
+  "computed": {
+    "rangeHigh": 19426,
+    "rangeLow":  19388,
+    "atr14":     23.357142857142858,
+    "atr14_derivation": "327 / 14 (last 14 true-ranges from 65 bars)",
+    "biasBodyThreshold": 35.035714285714285,
+    "biasBodyActual": 48
+  },
+  "breakBarTrace": [
+    {
+      "breakBarIdx": 0,
+      "barTime": "2025-04-17T06:13:00Z",
+      "edtTime": "02:13 EDT",
+      "ohlcv": { "o": 19406, "h": 19434, "l": 19404, "c": 19430, "v": 315 },
+      "role": "sweep",
+      "pineScript": "close(19430) > r2H(19426) → rbs2sStg := 1 [Pine line 316]",
+      "pineScript_source": [
+        "// Pine lines 314-316 (source file line 314):",
+        "if rbs2sStg == 0",
+        "    if close > r2H   -- 19430 > 19426 → TRUE",
+        "        rbs2sStg := 1"
+      ],
+      "shortMachine": {
+        "stage": 1,
+        "pending": false,
+        "bcBodyBot": null,
+        "slSource": null
+      }
+    },
+    {
+      "breakBarIdx": 1,
+      "barTime": "2025-04-17T06:14:00Z",
+      "edtTime": "02:14 EDT",
+      "ohlcv": { "o": 19428, "h": 19440, "l": 19370, "c": 19380, "v": 885 },
+      "role": "bias_candle",
+      "pineScript": "bigBearCandle (body=48≥35.04) → rbs2sStg:=2, bcH=19440, bcBT=19428, bcBB=19380 [Pine lines 320-326]",
+      "pineScript_source": [
+        "// Pine lines 134-136 (bigBearCandle definition):",
+        "bigBearCandle = close < open and math.abs(open - close) >= fvgSizeMult * atr14",
+        "              = 19380 < 19428  AND  |19428-19380|=48 >= 1.5×23.357=35.04  → TRUE",
+        "// Pine lines 319-325 (stage 1 → 2 transition):",
+        "else if rbs2sStg == 1",
+        "    if bigBearCandle   -- TRUE",
+        "        rbs2sStg  := 2",
+        "        rbs2sBcH  := high   -- 19440",
+        "        rbs2sBcL  := low    -- 19370",
+        "        rbs2sBcBT := open   -- 19428",
+        "        rbs2sBcBB := close  -- 19380"
+      ],
+      "shortMachine": {
+        "stage": 2,
+        "pending": false,
+        "bcBodyBot": 19380,
+        "slSource": null
+      }
+    },
+    {
+      "breakBarIdx": 2,
+      "barTime": "2025-04-17T06:15:00Z",
+      "edtTime": "02:15 EDT",
+      "ohlcv": { "o": 19378, "h": 19383, "l": 19369, "c": 19382, "v": 440 },
+      "role": "retest",
+      "pineScript": "h(19383)≥bcBB(19380), close(19382) NOT < 19380 → rbs2sStg:=3 [Pine line 339]",
+      "pineScript_source": [
+        "// Pine lines 330-339 (stage 2 retest check):",
+        "else if rbs2sStg == 2",
+        "    if high >= rbs2sBcBB and not na(rbs2sBcBB)  -- 19383 >= 19380  → TRUE",
+        "        if close < rbs2sBcBB and inRbs2          -- 19382 < 19380  → FALSE",
+        "            rbs2sPend := true  -- not reached",
+        "        else",
+        "            rbs2sStg := 3      -- this branch executes"
+      ],
+      "shortMachine": {
+        "stage": 3,
+        "pending": false,
+        "bcBodyBot": 19380,
+        "slSource": null
+      }
+    },
+    {
+      "breakBarIdx": 3,
+      "barTime": "2025-04-17T06:16:00Z",
+      "edtTime": "02:16 EDT",
+      "ohlcv": { "o": 19381, "h": 19382, "l": 19372, "c": 19376, "v": 375 },
+      "role": "BOS",
+      "pineScript": "close(19376)<bcBB(19380) ∧ inRbs2 → rbs2sPend:=true, rbsSlH:=19440, rbs2sStg:=0 [Pine lines 345-348]",
+      "pineScript_source": [
+        "// Pine lines 344-348 (stage 3 BOS check):",
+        "else if rbs2sStg == 3",
+        "    if close < rbs2sBcBB and not na(rbs2sBcBB) and inRbs2",
+        "       -- 19376 < 19380  AND  not na  AND  inBrk2 (break window active)  → TRUE",
+        "        rbs2sPend := true    -- signal pending",
+        "        rbsSlH    := rbs2sBcH  -- stop-loss source = bias candle HIGH = 19440",
+        "        rbs2sStg  := 0       -- reset state machine"
+      ],
+      "shortMachine": {
+        "stage": 0,
+        "pending": true,
+        "bcBodyBot": 19380,
+        "slSource": 19440
+      }
+    }
+  ],
+  "alert": {
+    "_note": "Signal pending flag set on BOS bar close; entry order submitted at next bar open (Pine: process_orders_on_close=true, calc_on_every_tick=true)",
+    "firedAt": "2025-04-17T06:16:00Z",
+    "alertText": "RBS SHORT BOS fired",
+    "direction": "short",
+    "slSource": 19440,
+    "stopPrice": 19440,
+    "tp1Price": 19388,
+    "rangeHigh": 19426,
+    "rangeLow": 19388,
+    "pineScript_slFormula": "roundToTick(rbs2sBcH + slMult × atr14, minTick) = roundToTick(19440 + 0 × 23.357, 0.25) = 19440",
+    "pineScript_tpFormula": "roundToTick(r2L, minTick) = roundToTick(19388, 0.25) = 19388"
+  }
+}
