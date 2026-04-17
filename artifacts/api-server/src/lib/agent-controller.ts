@@ -2735,11 +2735,12 @@ class AgentController {
   ): Promise<void> {
     const today = this.currentDate;
 
-    // Compute win/loss counts from trades table
+    // Compute win/loss counts from trades table (source of truth for all counts)
     const result = await db
       .select({
         wins: sql<number>`count(*) filter (where pnl > 0)`,
         losses: sql<number>`count(*) filter (where pnl < 0)`,
+        total: sql<number>`count(*)`,
         londonPnl: sql<number>`coalesce(sum(pnl) filter (where session = 'london'), 0)`,
         nyPnl: sql<number>`coalesce(sum(pnl) filter (where session = 'ny'), 0)`,
       })
@@ -2751,13 +2752,15 @@ class AgentController {
         )
       );
 
-    const stats = result[0] ?? { wins: 0, losses: 0, londonPnl: 0, nyPnl: 0 };
+    const stats = result[0] ?? { wins: 0, losses: 0, total: 0, londonPnl: 0, nyPnl: 0 };
+    // Use DB-derived trade count so win rate stays consistent after server restarts
+    const dbTradeCount = Math.max(Number(stats.total), this.tradeCount);
 
     await db
       .update(dailySummaryTable)
       .set({
         totalPnl: this.dailyPnl,
-        tradeCount: this.tradeCount,
+        tradeCount: dbTradeCount,
         winCount: Number(stats.wins),
         lossCount: Number(stats.losses),
         status: status ?? "active",

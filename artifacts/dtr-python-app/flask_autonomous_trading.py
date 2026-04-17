@@ -132,7 +132,7 @@ def _build_dashboard_payload(ts_status: dict) -> dict:
     summary_resp = _ts_get("/agent/daily-summary")
     trade_count = summary_resp.get("tradeCount", ts_status.get("tradeCount", 0))
     win_count = summary_resp.get("winCount", 0)
-    win_rate = (win_count / trade_count) if trade_count > 0 else 0
+    win_rate = min(1.0, win_count / trade_count) if trade_count > 0 else 0
 
     account_resp = _ts_get("/account", timeout=6)
     balance = account_resp.get("balance")
