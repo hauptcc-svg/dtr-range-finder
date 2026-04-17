@@ -1034,8 +1034,7 @@ describe("CSV bar replay — TradingView alert cross-check (NQ 2AM 2025-04-17)",
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TEST SUITE: roundToTick — edge-case coverage
+// TEST SUITE 16: roundToTick — edge-case coverage
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // roundToTick(price, tickSize) = Math.round(price / tickSize) * tickSize
@@ -1128,5 +1127,104 @@ describe("roundToTick — negative prices (e.g. spread or inverted instrument)",
     // -5.125 / 0.25 = -20.5  →  Math.round(-20.5) = -20  →  -20 × 0.25 = -5.0
     // JS Math.round(-20.5) = -20  (rounds toward positive infinity at tie)
     assert.equal(roundToTick(-5.125, 0.25), -5.0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEST SUITE 17: ATR-multiplied stop-loss distance (slMult > 0)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// All previous suites use slMult=0, which collapses the stop formula to simply
+// roundToTick(slSource, minTick) — skipping both the ATR offset and the tick
+// rounding of a non-integer result.  This suite exercises slMult=1.0 so that
+// the full formula:
+//
+//   SHORT  stopPrice = roundToTick(bcHigh + slMult × ATR, minTick)
+//   LONG   stopPrice = roundToTick(bcLow  − slMult × ATR, minTick)
+//
+// is validated end-to-end against independently hand-computed expected values.
+//
+// SHORT uses the real CSV bar set (NQ 2AM 2025-04-17):
+//   ATR14      = 327 / 14 ≈ 23.3571
+//   bcHigh     = 19440  (bias candle high recorded at break bar 1)
+//   stopPrice  = roundToTick(19440 + 23.3571, 0.25)
+//              = roundToTick(19463.3571, 0.25) = 19463.25
+//
+// LONG uses the synthetic long-fixture bar set (rbs-long-session-trace.json):
+//   ATR14      = 423 / 14 ≈ 30.2143
+//   bcLow      = 18935  (bias candle low, slSource from the LONG fixture)
+//   stopPrice  = roundToTick(18935 − 30.2143, 0.25)
+//              = roundToTick(18904.7857, 0.25) = 18904.75
+
+describe("ATR-multiplied stop-loss distance — slMult=1.0 end-to-end", () => {
+  test("SHORT stopPrice = roundToTick(bcHigh + 1.0 × ATR, minTick) using CSV bars", () => {
+    const atr14 = computeAtr14(csvBars);
+    assert.ok(atr14 !== null, "ATR must be computable from 65 CSV bars");
+
+    const result = buildRbsSession(
+      csvBars,
+      CSV_RANGE_END_MS,
+      CSV_BREAK_START_MS,
+      CSV_BREAK_END_MS,
+      CSV_FVG_MULT,
+      1.0,             // slMult = 1.0 (non-zero, exercises ATR offset)
+      CSV_CURRENT_PRICE,
+      CSV_MIN_TICK,
+    );
+
+    assert.ok(result.shortSignal !== null, "SHORT BOS must fire for the CSV session");
+
+    // Independently compute expected stop: bcHigh + 1.0 × ATR rounded to 0.25
+    const bcHigh = result.shortMachine.slSource!;
+    const expected = Math.round((bcHigh + 1.0 * atr14!) / CSV_MIN_TICK) * CSV_MIN_TICK;
+
+    assert.equal(
+      result.shortSignal!.stopPrice,
+      expected,
+      `stopPrice must equal roundToTick(${bcHigh} + 1.0 × ${atr14}, ${CSV_MIN_TICK}) = ${expected}`,
+    );
+
+    // Also verify the sub-cent exact value derived from the known ATR (327/14)
+    assert.equal(
+      result.shortSignal!.stopPrice,
+      19463.25,
+      "stopPrice must be 19463.25 (roundToTick(19440 + 327/14, 0.25))",
+    );
+  });
+
+  test("LONG stopPrice = roundToTick(bcLow − 1.0 × ATR, minTick) using long-fixture bars", () => {
+    const { params, bars } = longFixture;
+    const atr14 = computeAtr14(bars);
+    assert.ok(atr14 !== null, "ATR must be computable from long-fixture bars");
+
+    const result = buildRbsSession(
+      bars,
+      params.rangeEndMs,
+      params.breakStartMs,
+      params.breakEndMs,
+      params.fvgSizeMult,
+      1.0,             // slMult = 1.0 (overrides fixture default of 0)
+      params.currentPrice,
+      params.minTick,
+    );
+
+    assert.ok(result.longSignal !== null, "LONG BOS must fire for the long-fixture session");
+
+    // Independently compute expected stop: bcLow − 1.0 × ATR rounded to minTick
+    const bcLow = result.longMachine.slSource!;
+    const expected = Math.round((bcLow - 1.0 * atr14!) / params.minTick) * params.minTick;
+
+    assert.equal(
+      result.longSignal!.stopPrice,
+      expected,
+      `stopPrice must equal roundToTick(${bcLow} − 1.0 × ${atr14}, ${params.minTick}) = ${expected}`,
+    );
+
+    // Also verify the sub-cent exact value derived from the known ATR (423/14)
+    assert.equal(
+      result.longSignal!.stopPrice,
+      18904.75,
+      "stopPrice must be 18904.75 (roundToTick(18935 − 423/14, 0.25))",
+    );
   });
 });
