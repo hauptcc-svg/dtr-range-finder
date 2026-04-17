@@ -50,3 +50,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Post-merge build cache (filesystem-persistent, not source)
+.post-merge-hashes
