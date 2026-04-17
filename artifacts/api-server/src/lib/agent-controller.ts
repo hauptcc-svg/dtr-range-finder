@@ -22,7 +22,7 @@ import {
   type EntrySignal,
   type RbsSessionResult,
 } from "./dtr-strategy";
-import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, type ClaudeAdvice } from "./claude-advisor";
+import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, computeAtr, type ClaudeAdvice } from "./claude-advisor";
 import { checkAtrPullbackSignal, DEFAULT_ATR_PULLBACK_PARAMS } from "./atr-pullback-strategy";
 import { db, tradesTable, dailySummaryTable, instrumentConfigsTable, accountConfigsTable } from "@workspace/db";
 import type { InstrumentConfig as DbInstrumentConfigRow } from "@workspace/db";
@@ -118,6 +118,10 @@ class AgentController {
   private lastClaudeAutonomousTick = 0;
   // How often to call Claude in autonomous mode (ms)
   private readonly CLAUDE_AUTONOMOUS_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  // Max stacked positions per instrument in Claude autonomous mode (initial + add-ons)
+  private readonly MAX_STACK = 2;
+  // How long a Claude position may be held before auto-close (ms)
+  private readonly CLAUDE_MAX_HOLD_MS = 30 * 60 * 1000; // 30 minutes
   // Cached account info (updated on start and on demand)
   private cachedAccountInfo: { balance: number; accountId: number; accountName: string; canTrade: boolean } | null = null;
   // Deduplication: tracks the timestamp of the last bar that fired an ATR pullback signal per instrument
@@ -554,8 +558,42 @@ class AgentController {
   }
 
   /**
-   * Autonomous tick: fetch recent bars + prices for all enabled instruments,
-   * send to Claude, execute its decisions (long/short/close/skip).
+   * Compute stop and TP for a Claude autonomous bracket order.
+   * SL = from ATR signal (if present), else 1× ATR from bars, else 0.5% of price.
+   * TP = sized to deliver ~$35 profit, clamped to [$20, $50], snapped to minTick.
+   */
+  private computeClaudeBracket(
+    isBuy: boolean,
+    price: number,
+    config: { pointValue: number; qty: number; minTick: number },
+    atrSignal: import("./atr-pullback-strategy").AtrPullbackSignal | null,
+    bars5m: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }>
+  ): { stopPrice: number; tp1Price: number } {
+    // --- Stop loss ---
+    let stopPrice: number;
+    if (atrSignal) {
+      stopPrice = atrSignal.stopPrice;
+    } else {
+      const atr = bars5m.length >= 2 ? computeAtr(bars5m) : 0;
+      const stopDist = atr > 0 ? atr : price * 0.005;
+      stopPrice = isBuy ? price - stopDist : price + stopDist;
+    }
+
+    // --- Take profit: target $35, clamped [$20, $50], snapped to minTick ---
+    const minTp = 20 / (config.pointValue * config.qty);
+    const midTp = 35 / (config.pointValue * config.qty);
+    const maxTp = 50 / (config.pointValue * config.qty);
+    const rawTp = Math.min(maxTp, Math.max(minTp, midTp));
+    // Snap up to next minTick boundary
+    const snappedTp = Math.ceil(rawTp / config.minTick) * config.minTick;
+    const tp1Price = isBuy ? price + snappedTp : price - snappedTp;
+
+    return { stopPrice, tp1Price };
+  }
+
+  /**
+   * Autonomous tick: fetch recent bars + ATR pullback signals for all instruments,
+   * send to Claude, execute its decisions (long/short/close/skip/stack/reverse).
    * Rate-limited to CLAUDE_AUTONOMOUS_INTERVAL_MS.
    */
   private async autonomousTick(): Promise<void> {
@@ -585,6 +623,8 @@ class AgentController {
       eligibleInstruments.map(async ({ state, config }) => {
         let recentBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
         let scalp1mBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
+        let signal5m: import("./atr-pullback-strategy").AtrPullbackSignal | null = null;
+        let signal1m: import("./atr-pullback-strategy").AtrPullbackSignal | null = null;
         if (state.contractId && this.client) {
           try {
             const [bars5m, bars1m] = await Promise.all([
@@ -599,21 +639,23 @@ class AgentController {
               t: new Date(b.t).toISOString(),
               o: b.o, h: b.h, l: b.l, c: b.c, v: b.v,
             }));
-            // Use most recent 5m close as last price (falls back to 1m if 5m unavailable)
             if (recentBars.length > 0) {
               state.lastPrice = recentBars[recentBars.length - 1].c;
             } else if (scalp1mBars.length > 0) {
               state.lastPrice = scalp1mBars[scalp1mBars.length - 1].c;
             }
+            // Compute ATR pullback signals for both timeframes (all instruments)
+            signal5m = checkAtrPullbackSignal(bars5m, state.todayTrades, DEFAULT_ATR_PULLBACK_PARAMS);
+            signal1m = checkAtrPullbackSignal(bars1m, state.todayTrades, DEFAULT_ATR_PULLBACK_PARAMS);
             logger.debug(
-              { symbol: state.symbol, bars5m: recentBars.length, bars1m: scalp1mBars.length },
-              "Dual-timeframe bars fetched for autonomous tick"
+              { symbol: state.symbol, bars5m: recentBars.length, bars1m: scalp1mBars.length, signal5m: signal5m?.direction ?? null, signal1m: signal1m?.direction ?? null },
+              "Dual-timeframe bars + ATR signals fetched for autonomous tick"
             );
           } catch (err) {
             logger.warn({ err, symbol: state.symbol }, "Failed to fetch bars for autonomous tick");
           }
         }
-        return { state, config: config!, recentBars, scalp1mBars, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
+        return { state, config: config!, recentBars, scalp1mBars, signal5m, signal1m, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
       })
     );
 
@@ -638,10 +680,12 @@ class AgentController {
       const state = this.instrumentStates.get(decision.symbol);
       const config = this.getEffectiveConfig(decision.symbol);
       if (!state || !config || !state.contractId) continue;
+      const instrData = instrumentsWithBars.find((i) => i.state.symbol === decision.symbol);
 
       // Guard: daily limits
       if (this.dailyPnl <= -this.effectiveLossLimit()) break;
 
+      // ── CLOSE ──────────────────────────────────────────────────────────────
       if (decision.action === "close") {
         if (!state.inPosition) continue;
         try {
@@ -653,9 +697,94 @@ class AgentController {
         continue;
       }
 
+      // ── REVERSE ────────────────────────────────────────────────────────────
+      if (decision.action === "reverse") {
+        if (!state.inPosition) continue;
+        const reverseDir = state.positionDirection === "long" ? "short" : "long";
+        try {
+          await this.client!.closePositionForContract(state.contractId);
+          logger.info({ symbol: decision.symbol, reverseDir }, "Claude autonomous: closing for reversal");
+          // Brief pause for close to propagate, then enter reverse
+          await new Promise((r) => setTimeout(r, 1500));
+          const isBuy = reverseDir === "long";
+          const price = state.lastPrice;
+          if (!price) continue;
+          const activeSignal = reverseDir === "long" ? instrData?.signal5m ?? instrData?.signal1m : instrData?.signal5m ?? instrData?.signal1m;
+          const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal ?? null, instrData?.recentBars ?? []);
+          const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
+          const isScalp = decision.timeframe === "1m_scalp";
+          const [trade] = await db.insert(tradesTable).values({
+            instrument: decision.symbol, direction: reverseDir, entryPrice: price, exitPrice: null,
+            qty: config.qty, pnl: null, stopPrice, tp1Price, tp2Price: null,
+            session: "ny", status: "open", projectxOrderId: orderResult.orderId,
+            entryTime: new Date(), exitTime: null, strategy: "claude",
+            notes: isScalp ? "scalp:reverse" : "reverse",
+          }).returning();
+          state.inPosition = true;
+          state.positionDirection = reverseDir;
+          state.isClaudePosition = true;
+          state.positionStackCount = 0;
+          state.positionQty = config.qty;
+          state.positionEntryPrice = price;
+          state.positionStopPrice = stopPrice;
+          state.positionTp1Price = tp1Price;
+          state.positionOpenedAt = new Date().toISOString();
+          state.openTradeId = trade.id;
+          state.todayTrades++;
+          this.tradeCount++;
+          logger.info({ symbol: decision.symbol, reverseDir, price }, "Claude autonomous: reversal entered");
+          this.sendTelegram(
+            `🔄 <b>REVERSAL</b> · DeclanCapital FX\n\n` +
+            `<b>${config.name ?? decision.symbol}</b> → Now <b>${reverseDir.toUpperCase()}</b>\n` +
+            `<b>Entry:</b> ${price.toFixed(2)} | <b>Stop:</b> ${stopPrice.toFixed(2)} | <b>TP:</b> ${tp1Price.toFixed(2)}\n` +
+            `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n<i>${new Date().toUTCString()}</i>`
+          ).catch(() => {});
+        } catch (err) {
+          logger.error({ err, symbol: decision.symbol }, "Failed to execute reversal (autonomous)");
+        }
+        continue;
+      }
+
+      // ── STACK ──────────────────────────────────────────────────────────────
+      if (decision.action === "stack") {
+        if (!state.inPosition || !state.isClaudePosition) continue;
+        if (state.positionStackCount >= this.MAX_STACK - 1) {
+          logger.info({ symbol: decision.symbol, stackCount: state.positionStackCount }, "Claude autonomous: max stack reached, skipping stack");
+          continue;
+        }
+        if (state.todayTrades >= this.effectiveMaxTrades(decision.symbol)) continue;
+        const isBuy = state.positionDirection === "long";
+        const price = state.lastPrice;
+        if (!price) continue;
+        const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+        const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
+        try {
+          const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
+          await db.insert(tradesTable).values({
+            instrument: decision.symbol, direction: state.positionDirection!, entryPrice: price, exitPrice: null,
+            qty: config.qty, pnl: null, stopPrice, tp1Price, tp2Price: null,
+            session: "ny", status: "open", projectxOrderId: orderResult.orderId,
+            entryTime: new Date(), exitTime: null, strategy: "claude", notes: "stack",
+          });
+          state.positionStackCount++;
+          state.todayTrades++;
+          this.tradeCount++;
+          logger.info({ symbol: decision.symbol, stackCount: state.positionStackCount }, "Claude autonomous: stack added");
+          this.sendTelegram(
+            `📈 <b>STACK ADD</b> · DeclanCapital FX\n\n` +
+            `<b>${config.name ?? decision.symbol}</b> (${state.positionDirection?.toUpperCase()}) — Stack ${state.positionStackCount + 1}/${this.MAX_STACK}\n` +
+            `<b>Entry:</b> ${price.toFixed(2)} | <b>Stop:</b> ${stopPrice.toFixed(2)} | <b>TP:</b> ${tp1Price.toFixed(2)}\n` +
+            `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n<i>${new Date().toUTCString()}</i>`
+          ).catch(() => {});
+        } catch (err) {
+          logger.error({ err, symbol: decision.symbol }, "Failed to place stack order (autonomous)");
+        }
+        continue;
+      }
+
       if (decision.action === "skip") continue;
 
-      // Long or short entry
+      // ── LONG / SHORT entry ──────────────────────────────────────────────────
       if (state.inPosition) continue;
       if (state.todayTrades >= this.effectiveMaxTrades(decision.symbol)) continue;
 
@@ -663,10 +792,8 @@ class AgentController {
       const price = state.lastPrice;
       if (!price) continue;
 
-      // Simple ATR-based stops: use 0.5% of price as stop, 1% as TP
-      const stopDist = price * 0.005;
-      const stopPrice = isBuy ? price - stopDist : price + stopDist;
-      const tp1Price = isBuy ? price + stopDist * 2 : price - stopDist * 2;
+      const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+      const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
 
       try {
         const orderResult = await this.client!.placeBracketOrder({
@@ -677,7 +804,6 @@ class AgentController {
           tp1Price,
         });
 
-        // Prefer explicit schema field; fall back to keyword heuristic for robustness
         const isScalp = decision.timeframe === "1m_scalp" || /scalp/i.test(decision.reasoning ?? "");
         const [trade] = await db
           .insert(tradesTable)
@@ -702,6 +828,8 @@ class AgentController {
           .returning();
 
         state.inPosition = true;
+        state.isClaudePosition = true;
+        state.positionStackCount = 0;
         state.positionDirection = decision.action as "long" | "short";
         state.positionQty = config.qty;
         state.positionEntryPrice = price;
@@ -713,7 +841,7 @@ class AgentController {
         this.tradeCount++;
 
         logger.info(
-          { symbol: decision.symbol, action: decision.action, price, timeframe: decision.timeframe, isScalp },
+          { symbol: decision.symbol, action: decision.action, price, stopPrice, tp1Price, timeframe: decision.timeframe, isScalp },
           "Claude autonomous: trade placed"
         );
 
@@ -725,8 +853,7 @@ class AgentController {
           `<b>Entry:</b> ${price.toFixed(2)}\n` +
           `<b>Stop:</b> ${stopPrice.toFixed(2)}\n` +
           `<b>TP1:</b> ${tp1Price.toFixed(2)}\n` +
-          `<b>TP2:</b> —\n` +
-          `<b>Mode:</b> Claude AI (Auto)\n` +
+          `<b>Mode:</b> Claude AI (ATR Pullback)\n` +
           `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n` +
           `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
           `<i>${new Date().toUTCString()}</i>`
@@ -788,6 +915,8 @@ class AgentController {
         eligibleInstruments.map(async ({ state, config }) => {
           let recentBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
           let scalp1mBars: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }> = [];
+          let signal5m: import("./atr-pullback-strategy").AtrPullbackSignal | null = null;
+          let signal1m: import("./atr-pullback-strategy").AtrPullbackSignal | null = null;
           if (state.contractId && this.client) {
             try {
               const [bars5m, bars1m] = await Promise.all([
@@ -807,15 +936,17 @@ class AgentController {
               } else if (scalp1mBars.length > 0) {
                 state.lastPrice = scalp1mBars[scalp1mBars.length - 1].c;
               }
+              signal5m = checkAtrPullbackSignal(bars5m, state.todayTrades, DEFAULT_ATR_PULLBACK_PARAMS);
+              signal1m = checkAtrPullbackSignal(bars1m, state.todayTrades, DEFAULT_ATR_PULLBACK_PARAMS);
               logger.debug(
-                { symbol: state.symbol, bars5m: recentBars.length, bars1m: scalp1mBars.length },
-                "Dual-timeframe bars fetched for autonomous manual trigger"
+                { symbol: state.symbol, bars5m: recentBars.length, bars1m: scalp1mBars.length, signal5m: signal5m?.direction ?? null, signal1m: signal1m?.direction ?? null },
+                "Dual-timeframe bars + ATR signals fetched for autonomous manual trigger"
               );
             } catch {
               // non-fatal
             }
           }
-          return { state, config: config!, recentBars, scalp1mBars, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
+          return { state, config: config!, recentBars, scalp1mBars, signal5m, signal1m, effectiveMaxTrades: this.effectiveMaxTrades(state.symbol), effectiveMaxLossesPerDirection: this.effectiveMaxLossesPerDirection(state.symbol) };
         })
       );
 
@@ -841,7 +972,10 @@ class AgentController {
         const state = this.instrumentStates.get(decision.symbol);
         const config = this.getEffectiveConfig(decision.symbol);
         if (!state || !config || !state.contractId) continue;
+        const instrData = withBars.find((i) => i.state.symbol === decision.symbol);
+        if (this.dailyPnl <= -this.effectiveLossLimit()) continue;
 
+        // ── CLOSE ────────────────────────────────────────────────────────────
         if (decision.action === "close") {
           if (!state.inPosition) continue;
           try {
@@ -853,18 +987,94 @@ class AgentController {
           continue;
         }
 
+        // ── REVERSE ──────────────────────────────────────────────────────────
+        if (decision.action === "reverse") {
+          if (!state.inPosition) continue;
+          const reverseDir = state.positionDirection === "long" ? "short" : "long";
+          try {
+            await this.client!.closePositionForContract(state.contractId);
+            await new Promise((r) => setTimeout(r, 1500));
+            const isBuy = reverseDir === "long";
+            const price = state.lastPrice;
+            if (!price) continue;
+            const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+            const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
+            const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
+            const [trade] = await db.insert(tradesTable).values({
+              instrument: decision.symbol, direction: reverseDir, entryPrice: price, exitPrice: null,
+              qty: config.qty, pnl: null, stopPrice, tp1Price, tp2Price: null,
+              session: "ny", status: "open", projectxOrderId: orderResult.orderId,
+              entryTime: new Date(), exitTime: null, strategy: "claude", notes: "reverse",
+            }).returning();
+            state.inPosition = true;
+            state.isClaudePosition = true;
+            state.positionStackCount = 0;
+            state.positionDirection = reverseDir;
+            state.positionQty = config.qty;
+            state.positionEntryPrice = price;
+            state.positionStopPrice = stopPrice;
+            state.positionTp1Price = tp1Price;
+            state.positionOpenedAt = new Date().toISOString();
+            state.openTradeId = trade.id;
+            state.todayTrades++;
+            this.tradeCount++;
+            tradesPlaced.push(`${decision.symbol} REVERSED → ${reverseDir.toUpperCase()}`);
+            this.sendTelegram(
+              `🔄 <b>REVERSAL</b> · DeclanCapital FX\n\n` +
+              `<b>${config.name ?? decision.symbol}</b> → Now <b>${reverseDir.toUpperCase()}</b>\n` +
+              `<b>Entry:</b> ${price.toFixed(2)} | <b>Stop:</b> ${stopPrice.toFixed(2)} | <b>TP:</b> ${tp1Price.toFixed(2)}\n` +
+              `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n<i>${new Date().toUTCString()}</i>`
+            ).catch(() => {});
+          } catch (err) {
+            logger.error({ err, symbol: decision.symbol }, "Failed to execute reversal (autonomous manual)");
+          }
+          continue;
+        }
+
+        // ── STACK ────────────────────────────────────────────────────────────
+        if (decision.action === "stack") {
+          if (!state.inPosition || !state.isClaudePosition) continue;
+          if (state.positionStackCount >= this.MAX_STACK - 1) continue;
+          if (state.todayTrades >= this.effectiveMaxTrades(decision.symbol)) continue;
+          const isBuy = state.positionDirection === "long";
+          const price = state.lastPrice;
+          if (!price) continue;
+          const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+          const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
+          try {
+            const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
+            await db.insert(tradesTable).values({
+              instrument: decision.symbol, direction: state.positionDirection!, entryPrice: price, exitPrice: null,
+              qty: config.qty, pnl: null, stopPrice, tp1Price, tp2Price: null,
+              session: "ny", status: "open", projectxOrderId: orderResult.orderId,
+              entryTime: new Date(), exitTime: null, strategy: "claude", notes: "stack",
+            });
+            state.positionStackCount++;
+            state.todayTrades++;
+            this.tradeCount++;
+            tradesPlaced.push(`${decision.symbol} STACK ${state.positionStackCount}/${this.MAX_STACK}`);
+            this.sendTelegram(
+              `📈 <b>STACK ADD</b> · DeclanCapital FX\n\n` +
+              `<b>${config.name ?? decision.symbol}</b> — Stack ${state.positionStackCount + 1}/${this.MAX_STACK}\n` +
+              `<b>Entry:</b> ${price.toFixed(2)} | <b>Stop:</b> ${stopPrice.toFixed(2)} | <b>TP:</b> ${tp1Price.toFixed(2)}\n` +
+              `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n<i>${new Date().toUTCString()}</i>`
+            ).catch(() => {});
+          } catch (err) {
+            logger.error({ err, symbol: decision.symbol }, "Failed to place stack order (autonomous manual)");
+          }
+          continue;
+        }
+
         if (decision.action === "skip") continue;
         if (state.inPosition) continue;
         if (state.todayTrades >= this.effectiveMaxTrades(decision.symbol)) continue;
-        if (this.dailyPnl <= -this.effectiveLossLimit()) continue;
 
         const isBuy = decision.action === "long";
         const price = state.lastPrice;
         if (!price) continue;
 
-        const stopDist = price * 0.005;
-        const stopPrice = isBuy ? price - stopDist : price + stopDist;
-        const tp1Price  = isBuy ? price + stopDist * 2 : price - stopDist * 2;
+        const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+        const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
 
         try {
           const orderResult = await this.client!.placeBracketOrder({
@@ -875,7 +1085,6 @@ class AgentController {
             tp1Price,
           });
 
-          // Prefer explicit schema field; fall back to keyword heuristic for robustness
           const isScalp = decision.timeframe === "1m_scalp" || /scalp/i.test(decision.reasoning ?? "");
           const [trade] = await db
             .insert(tradesTable)
@@ -900,6 +1109,8 @@ class AgentController {
             .returning();
 
           state.inPosition = true;
+          state.isClaudePosition = true;
+          state.positionStackCount = 0;
           state.positionDirection = decision.action as "long" | "short";
           state.positionQty = config.qty;
           state.positionEntryPrice = price;
@@ -911,7 +1122,7 @@ class AgentController {
           this.tradeCount++;
 
           tradesPlaced.push(`${decision.symbol} ${decision.action.toUpperCase()}`);
-          logger.info({ symbol: decision.symbol, action: decision.action, timeframe: decision.timeframe, isScalp }, "Claude autonomous manual trade placed");
+          logger.info({ symbol: decision.symbol, action: decision.action, stopPrice, tp1Price, timeframe: decision.timeframe, isScalp }, "Claude autonomous manual trade placed");
           this.sendTelegram(
             `🧠 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
             `<b>${config.name ?? decision.symbol}</b> (${decision.symbol})\n` +
@@ -920,8 +1131,7 @@ class AgentController {
             `<b>Entry:</b> ${price.toFixed(2)}\n` +
             `<b>Stop:</b> ${stopPrice.toFixed(2)}\n` +
             `<b>TP1:</b> ${tp1Price.toFixed(2)}\n` +
-            `<b>TP2:</b> —\n` +
-            `<b>Mode:</b> Claude AI (Manual)\n` +
+            `<b>Mode:</b> Claude AI (ATR Pullback / Manual)\n` +
             `<b>Reasoning:</b> ${decision.reasoning ?? "—"}\n` +
             `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
             `<i>${new Date().toUTCString()}</i>`
@@ -1717,6 +1927,35 @@ class AgentController {
     }
   }
 
+  /**
+   * Enforce a 30-minute maximum hold time for Claude autonomous positions.
+   * Runs every tick; sends a market close + Telegram alert if the age threshold is exceeded.
+   */
+  private async enforceClaudeTimeStop(): Promise<void> {
+    if (!this.client) return;
+    const now = Date.now();
+    for (const [symbol, state] of this.instrumentStates.entries()) {
+      if (!state.inPosition || !state.isClaudePosition || !state.positionOpenedAt || !state.contractId) continue;
+      const openedMs = new Date(state.positionOpenedAt).getTime();
+      const heldMs = now - openedMs;
+      if (heldMs < this.CLAUDE_MAX_HOLD_MS) continue;
+
+      logger.warn({ symbol, heldMinutes: Math.round(heldMs / 60000) }, "enforceClaudeTimeStop: position held > 30 min — closing");
+      try {
+        await this.client.closePositionForContract(state.contractId);
+        this.sendTelegram(
+          `⏱ <b>TIME STOP</b> · DeclanCapital FX\n\n` +
+          `<b>${symbol}</b> held > 30 min — auto-closed\n` +
+          `<b>Direction:</b> ${state.positionDirection?.toUpperCase() ?? "?"} | <b>Entry:</b> ${state.positionEntryPrice?.toFixed(2) ?? "?"}\n` +
+          `<b>Stack:</b> ${state.positionStackCount + 1}/${this.MAX_STACK}\n` +
+          `<i>${new Date().toUTCString()}</i>`
+        ).catch(() => {});
+      } catch (err) {
+        logger.error({ err, symbol }, "enforceClaudeTimeStop: failed to close position");
+      }
+    }
+  }
+
   private async resolveContractIds(): Promise<void> {
     if (!this.client) return;
     // DB is sole source of truth — only resolve IDs for DB-configured instruments
@@ -1814,9 +2053,11 @@ class AgentController {
           state.positionEntryPrice = trade.entryPrice;
           state.positionOpenedAt = trade.entryTime.toISOString();
           state.openTradeId = trade.id;
+          state.isClaudePosition = trade.strategy === "claude";
+          state.positionStackCount = 0; // stack count not persisted; assume 0 on restart
           state.todayTrades++; // count this open trade toward the daily cap
           logger.info(
-            { symbol: trade.instrument, tradeId: trade.id },
+            { symbol: trade.instrument, tradeId: trade.id, isClaudePosition: state.isClaudePosition },
             "Restored open trade state from DB"
           );
         } else {
@@ -2215,6 +2456,9 @@ class AgentController {
     if (this.openPositionsCache.length > 0) {
       await this.healMissingBrackets();
     }
+
+    // 30-minute time-stop for Claude autonomous positions
+    await this.enforceClaudeTimeStop();
 
     // --- CLAUDE AUTONOMOUS MODE: bypass all DTR rules ---
     if (this.claudeAutonomousMode) {
@@ -2668,6 +2912,8 @@ class AgentController {
         }
 
         state.inPosition = false;
+        state.isClaudePosition = false;
+        state.positionStackCount = 0;
         state.positionDirection = null;
         state.positionQty = 0;
         state.positionEntryPrice = null;
@@ -2773,6 +3019,8 @@ class AgentController {
           ).catch(() => {});
 
           state.inPosition = false;
+          state.isClaudePosition = false;
+          state.positionStackCount = 0;
           state.positionDirection = null;
           state.positionQty = 0;
           state.positionEntryPrice = null;

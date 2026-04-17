@@ -92,6 +92,10 @@ export interface InstrumentState {
   positionTp1Price: number | null;
   rbs2: RbsSessionResult | null;
   rbs9: RbsSessionResult | null;
+  /** True when the current position was entered by Claude autonomous mode */
+  isClaudePosition: boolean;
+  /** Number of additional (stacked) entries added to the current Claude position (0 = just the initial entry) */
+  positionStackCount: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -115,6 +119,8 @@ export function createInstrumentState(symbol: string): InstrumentState {
     positionTp1Price: null,
     rbs2: null,
     rbs9: null,
+    isClaudePosition: false,
+    positionStackCount: 0,
   };
 }
 

@@ -1,16 +1,18 @@
 /**
- * Smoke tests for the dual-timeframe Claude autonomous prompt:
- * - 5-minute bars are the primary feed
- * - 1-minute bars are the scalp context
- * - `timeframe: "1m_scalp"` in decision triggers scalp note tagging
+ * Smoke tests for the ATR-pullback-guided autonomous Claude prompt:
+ * - 5-minute bars are the primary feed (with ATR signals)
+ * - 1-minute bars are the scalp context (with ATR signals)
+ * - `signal5m` / `signal1m` are passed and rendered in the prompt
+ * - `"stack"` and `"reverse"` actions are included in the schema
+ * - Scalp detection logic (timeframe field + keyword fallback) still works
  *
- * These tests validate prompt structure and scalp-detection logic without
- * hitting the live Anthropic API.
+ * These tests validate prompt structure without hitting the live Anthropic API.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { _buildAutonomousPromptForTest } from "../lib/claude-advisor.js";
 import type { BarSnapshot } from "../lib/claude-advisor.js";
+import type { AtrPullbackSignal } from "../lib/atr-pullback-strategy.js";
 import { createInstrumentState } from "../lib/dtr-strategy.js";
 
 // ---------------------------------------------------------------------------
@@ -21,7 +23,6 @@ function makeBar(t: string, price: number): BarSnapshot {
   return { t, o: price, h: price + 2, l: price - 2, c: price, v: 100 };
 }
 
-/** Generate N bars starting from baseTime (ISO) with 1-minute or 5-minute step. */
 function makeBars(n: number, basePrice: number, stepMs: number): BarSnapshot[] {
   const base = new Date("2025-04-17T09:00:00.000Z").getTime();
   return Array.from({ length: n }, (_, i) =>
@@ -29,8 +30,16 @@ function makeBars(n: number, basePrice: number, stepMs: number): BarSnapshot[] {
   );
 }
 
-const bars5m = makeBars(50, 19000, 5 * 60 * 1000);   // 50 × 5-min bars
-const bars1m = makeBars(25, 19010, 60 * 1000);        // 25 × 1-min bars
+const bars5m = makeBars(50, 19000, 5 * 60 * 1000);
+const bars1m = makeBars(25, 19010, 60 * 1000);
+
+const mockSignal5m: AtrPullbackSignal = {
+  direction: "long",
+  entryPrice: 19020,
+  stopPrice: 19000,
+  tp1Price: 19035,
+  atr: 20,
+};
 
 const mockInstrument = {
   state: (() => {
@@ -64,6 +73,8 @@ const mockInstrument = {
   },
   recentBars: bars5m,
   scalp1mBars: bars1m,
+  signal5m: mockSignal5m,
+  signal1m: null,
   effectiveMaxTrades: 4,
   effectiveMaxLossesPerDirection: 2,
 };
@@ -72,7 +83,7 @@ const mockInstrument = {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("Dual-timeframe autonomous prompt structure", () => {
+describe("ATR-guided autonomous prompt structure", () => {
   const prompt = _buildAutonomousPromptForTest(
     [mockInstrument],
     -50,
@@ -94,23 +105,71 @@ describe("Dual-timeframe autonomous prompt structure", () => {
     );
   });
 
-  it("includes at least 20 5m bars in the primary section", () => {
-    // Each bar renders as "HH:MM O:... H:... L:... C:... V:..."
+  it("includes ATR SIGNALS line in instrument block", () => {
+    assert.ok(
+      prompt.includes("ATR SIGNALS"),
+      "Prompt should include 'ATR SIGNALS' section per instrument"
+    );
+  });
+
+  it("renders 5m signal direction in ATR SIGNALS line", () => {
+    assert.ok(
+      prompt.includes("LONG"),
+      "Prompt should render the 5m signal direction (LONG)"
+    );
+  });
+
+  it("renders NO SIGNAL for null 1m signal", () => {
+    assert.ok(
+      prompt.includes("NO SIGNAL"),
+      "Prompt should render 'NO SIGNAL' when signal1m is null"
+    );
+  });
+
+  it("includes at least 20 bars in the primary section", () => {
     const barLines = (prompt.match(/O:\d+/g) ?? []).length;
     assert.ok(barLines >= 20, `Should have >=20 bar entries, got ${barLines}`);
   });
 
-  it("includes timeframe field in JSON schema example", () => {
+  it("includes timeframe field in JSON schema", () => {
     assert.ok(
       prompt.includes('"timeframe"'),
       "Prompt should include timeframe field in the JSON schema"
     );
   });
 
-  it("instructs Claude to use 1m_scalp value", () => {
+  it("includes 1m_scalp value in JSON schema", () => {
     assert.ok(
       prompt.includes("1m_scalp"),
       "Prompt should mention '1m_scalp' as a valid timeframe value"
+    );
+  });
+
+  it("includes 'stack' action in the schema", () => {
+    assert.ok(
+      prompt.includes('"stack"'),
+      "Prompt should include 'stack' as a valid action"
+    );
+  });
+
+  it("includes 'reverse' action in the schema", () => {
+    assert.ok(
+      prompt.includes('"reverse"'),
+      "Prompt should include 'reverse' as a valid action"
+    );
+  });
+
+  it("includes TP Target line with dollar amounts", () => {
+    assert.ok(
+      prompt.includes("TP Target"),
+      "Prompt should include 'TP Target' showing $20/$35/$50 guidance"
+    );
+  });
+
+  it("mentions 30-minute max hold rule", () => {
+    assert.ok(
+      prompt.includes("30 minutes"),
+      "Prompt should mention the 30-minute auto-close rule"
     );
   });
 });
@@ -141,10 +200,9 @@ describe("Scalp detection logic", () => {
   });
 });
 
-describe("Dual-timeframe bar counts in prompt", () => {
-  it("renders 5m bars as 09:00–09:04 increments", () => {
+describe("Dual-timeframe bar rendering", () => {
+  it("renders 5m bars with 09:00 as the first timestamp (oldest bar)", () => {
     const prompt = _buildAutonomousPromptForTest([mockInstrument], 0, 200, 1400);
-    // The 5m bars should show 09:00 as the first timestamp (oldest bar)
     assert.ok(prompt.includes("09:00"), "First 5m bar should be visible at 09:00");
   });
 
@@ -153,9 +211,18 @@ describe("Dual-timeframe bar counts in prompt", () => {
       ...mockInstrument,
       recentBars: [],
       scalp1mBars: [],
+      signal5m: null,
+      signal1m: null,
     };
     const prompt = _buildAutonomousPromptForTest([emptyInstrument], 0, 200, 1400);
     assert.ok(prompt.includes("(no 5m bar data available)"), "Should show 5m fallback");
     assert.ok(prompt.includes("(no 1m bar data available)"), "Should show 1m fallback");
+  });
+
+  it("renders both signals as NO SIGNAL when both are null", () => {
+    const noSignalInstrument = { ...mockInstrument, signal5m: null, signal1m: null };
+    const prompt = _buildAutonomousPromptForTest([noSignalInstrument], 0, 200, 1400);
+    const noSignalCount = (prompt.match(/NO SIGNAL/g) ?? []).length;
+    assert.ok(noSignalCount >= 2, `Should have at least 2 NO SIGNAL occurrences, got ${noSignalCount}`);
   });
 });
