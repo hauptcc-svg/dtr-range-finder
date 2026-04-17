@@ -577,31 +577,6 @@ class AgentController {
   }
 
   /**
-   * Mark ALL open DB trade rows for a Claude position as closed.
-   * Covers original entry + any stack legs (which may have been inserted as separate rows).
-   * Called on reverse, time-stop, and any path that closes a Claude position without going
-   * through the normal syncPositionStates iteration.
-   */
-  private async closeAllOpenClaudeTrades(symbol: string, exitTime: Date): Promise<void> {
-    try {
-      await db
-        .update(tradesTable)
-        // pnl intentionally left null — actual realized PnL is captured by the broker
-        // reconciliation loop (syncPositionStates) when it runs after market close.
-        .set({ status: "closed", exitTime, pnl: null })
-        .where(
-          and(
-            eq(tradesTable.instrument, symbol),
-            eq(tradesTable.strategy, "claude"),
-            eq(tradesTable.status, "open"),
-          )
-        );
-    } catch (err) {
-      logger.error({ err, symbol }, "closeAllOpenClaudeTrades: failed");
-    }
-  }
-
-  /**
    * Compute stop and TP for a Claude autonomous bracket order.
    * SL = from ATR signal (if present), else 1× ATR from bars, else 0.5% of price.
    * TP = sized to deliver ~$35 profit, clamped to [$20, $50], snapped to minTick.
@@ -757,9 +732,24 @@ class AgentController {
           if (!price) continue;
           const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
           const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal ?? null, instrData?.recentBars ?? []);
+          // Compute estimated P&L for the closing leg and close the original trade row
+          const closeExitPrice = price;
+          const closePnl = state.positionDirection && state.positionEntryPrice
+            ? calculatePnl(state.positionDirection, state.positionEntryPrice, closeExitPrice, state.positionQty, config.pointValue)
+            : 0;
+          if (state.openTradeId) {
+            await db.update(tradesTable).set({
+              status: "closed", exitPrice: closeExitPrice, exitTime: new Date(), pnl: closePnl,
+            }).where(eq(tradesTable.id, state.openTradeId));
+          }
+          this.dailyPnl += closePnl;
+          if (closePnl < 0) {
+            if (state.positionDirection === "long") state.longLosses++;
+            else if (state.positionDirection === "short") state.shortLosses++;
+          }
+          await this.updateDailySummary().catch(() => {});
+
           const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
-          // Close all prior open Claude trade rows (original + any stack legs) before recording reversal
-          await this.closeAllOpenClaudeTrades(decision.symbol, new Date());
           const isScalp = decision.timeframe === "1m_scalp";
           const [trade] = await db.insert(tradesTable).values({
             instrument: decision.symbol, direction: reverseDir, entryPrice: price, exitPrice: null,
@@ -808,11 +798,14 @@ class AgentController {
         const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
         try {
           const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
+          // Stack legs are audit records only — immediately mark closed so they don't
+          // interfere with P&L reconciliation or syncPositionStates. The original
+          // openTradeId entry represents the open position for accounting purposes.
           await db.insert(tradesTable).values({
-            instrument: decision.symbol, direction: state.positionDirection!, entryPrice: price, exitPrice: null,
+            instrument: decision.symbol, direction: state.positionDirection!, entryPrice: price, exitPrice: price,
             qty: config.qty, pnl: null, stopPrice, tp1Price, tp2Price: null,
-            session: "ny", status: "open", projectxOrderId: orderResult.orderId,
-            entryTime: new Date(), exitTime: null, strategy: "claude", notes: "stack",
+            session: "ny", status: "closed", projectxOrderId: orderResult.orderId,
+            entryTime: new Date(), exitTime: new Date(), strategy: "claude", notes: "stack",
           });
           state.positionStackCount++;
           state.todayTrades++;
@@ -1048,9 +1041,24 @@ class AgentController {
             if (!price) continue;
             const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
             const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
+            // Compute estimated P&L for the closing leg and close the original trade row
+            const closeExitPrice = price;
+            const closePnl = state.positionDirection && state.positionEntryPrice
+              ? calculatePnl(state.positionDirection, state.positionEntryPrice, closeExitPrice, state.positionQty, config.pointValue)
+              : 0;
+            if (state.openTradeId) {
+              await db.update(tradesTable).set({
+                status: "closed", exitPrice: closeExitPrice, exitTime: new Date(), pnl: closePnl,
+              }).where(eq(tradesTable.id, state.openTradeId));
+            }
+            this.dailyPnl += closePnl;
+            if (closePnl < 0) {
+              if (state.positionDirection === "long") state.longLosses++;
+              else if (state.positionDirection === "short") state.shortLosses++;
+            }
+            await this.updateDailySummary().catch(() => {});
+
             const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
-            // Close all prior open Claude trade rows (original + any stack legs) before recording reversal
-            await this.closeAllOpenClaudeTrades(decision.symbol, new Date());
             const [trade] = await db.insert(tradesTable).values({
               instrument: decision.symbol, direction: reverseDir, entryPrice: price, exitPrice: null,
               qty: config.qty, pnl: null, stopPrice, tp1Price, tp2Price: null,
@@ -1094,11 +1102,12 @@ class AgentController {
           const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
           try {
             const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
+            // Stack legs are audit records — immediately mark closed to avoid P&L double-counting
             await db.insert(tradesTable).values({
-              instrument: decision.symbol, direction: state.positionDirection!, entryPrice: price, exitPrice: null,
+              instrument: decision.symbol, direction: state.positionDirection!, entryPrice: price, exitPrice: price,
               qty: config.qty, pnl: null, stopPrice, tp1Price, tp2Price: null,
-              session: "ny", status: "open", projectxOrderId: orderResult.orderId,
-              entryTime: new Date(), exitTime: null, strategy: "claude", notes: "stack",
+              session: "ny", status: "closed", projectxOrderId: orderResult.orderId,
+              entryTime: new Date(), exitTime: new Date(), strategy: "claude", notes: "stack",
             });
             state.positionStackCount++;
             state.todayTrades++;
@@ -1992,11 +2001,36 @@ class AgentController {
       if (heldMs < this.CLAUDE_MAX_HOLD_MS) continue;
 
       logger.warn({ symbol, heldMinutes: Math.round(heldMs / 60000) }, "enforceClaudeTimeStop: position held > 30 min — closing");
+      // Capture state before clearing (needed for P&L computation + notification)
       const closedDirection = state.positionDirection;
       const closedEntry = state.positionEntryPrice;
       const closedStack = state.positionStackCount;
+      const closedTradeId = state.openTradeId;
       try {
         await this.client.closePositionForContract(state.contractId);
+
+        // Compute estimated P&L (matches flattenAllPositions pattern)
+        const exitPrice = state.lastPrice ?? state.positionEntryPrice ?? 0;
+        const cfg = this.getEffectiveConfig(symbol);
+        const pnl = closedDirection && closedEntry
+          ? calculatePnl(closedDirection, closedEntry, exitPrice, state.positionQty, cfg?.pointValue ?? 10)
+          : 0;
+
+        // Persist closure on the original (open) trade row with estimated P&L
+        if (closedTradeId) {
+          await db.update(tradesTable).set({
+            status: "closed", exitPrice, exitTime: new Date(), pnl,
+          }).where(eq(tradesTable.id, closedTradeId));
+        }
+
+        // Update daily accounting and loss counters (mirrors flattenAllPositions)
+        this.dailyPnl += pnl;
+        if (pnl < 0) {
+          if (closedDirection === "long") state.longLosses++;
+          else if (closedDirection === "short") state.shortLosses++;
+        }
+        await this.updateDailySummary().catch(() => {});
+
         // Immediately reset in-memory state so this position is not targeted again
         state.inPosition = false;
         state.isClaudePosition = false;
@@ -2008,13 +2042,13 @@ class AgentController {
         state.positionTp1Price = null;
         state.positionOpenedAt = null;
         state.openTradeId = null;
-        // Mark ALL open Claude trade rows closed (covers original entry + any stack legs)
-        await this.closeAllOpenClaudeTrades(symbol, new Date());
+
         this.sendTelegram(
           `⏱ <b>TIME STOP</b> · DeclanCapital FX\n\n` +
           `<b>${symbol}</b> held > 30 min — auto-closed\n` +
-          `<b>Direction:</b> ${closedDirection?.toUpperCase() ?? "?"} | <b>Entry:</b> ${closedEntry?.toFixed(2) ?? "?"}\n` +
-          `<b>Stack:</b> ${closedStack + 1}/${this.MAX_STACK}\n` +
+          `<b>Direction:</b> ${closedDirection?.toUpperCase() ?? "?"} | <b>Entry:</b> ${closedEntry?.toFixed(2) ?? "?"} → <b>Exit:</b> ${exitPrice.toFixed(2)}\n` +
+          `<b>P&amp;L:</b> ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} | <b>Stack:</b> ${closedStack + 1}/${this.MAX_STACK}\n` +
+          `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
           `<i>${new Date().toUTCString()}</i>`
         ).catch(() => {});
       } catch (err) {
