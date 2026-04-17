@@ -63,6 +63,72 @@ function stageInfo(stage: number, pending: boolean, signalFired: boolean): { lab
   }
 }
 
+const STEP_CONFIG = [
+  { label: "Swpt", activeColor: "#60a5fa" },
+  { label: "Bias", activeColor: "#fb923c" },
+  { label: "Rtst", activeColor: "#c084fc" },
+  { label: "Sig",  activeColor: "#facc15" },
+] as const;
+
+function getActiveStep(stage: number, pending: boolean, signalFired: boolean): number {
+  if (signalFired || pending) return 4;
+  return stage;
+}
+
+function StageTracker({
+  stage,
+  pending,
+  signalFired,
+}: {
+  stage: number;
+  pending: boolean;
+  signalFired: boolean;
+}) {
+  const activeStep = getActiveStep(stage, pending, signalFired);
+
+  return (
+    <div className="flex items-center gap-0 w-full">
+      {STEP_CONFIG.map((step, i) => {
+        const stepNumber = i + 1;
+        const isActive = activeStep === stepNumber;
+        const isCompleted = activeStep > stepNumber;
+        const isReached = isActive || isCompleted;
+        const isLast = i === STEP_CONFIG.length - 1;
+
+        return (
+          <div key={step.label} className="flex items-center" style={{ flex: isLast ? "0 0 auto" : "1 1 0%" }}>
+            <div
+              title={step.label}
+              className="relative flex items-center justify-center flex-shrink-0"
+              style={{ width: 14, height: 14 }}
+            >
+              <div
+                className="rounded-full transition-all duration-300"
+                style={{
+                  width: isActive ? 12 : 8,
+                  height: isActive ? 12 : 8,
+                  backgroundColor: isReached ? step.activeColor : "#374151",
+                  opacity: isCompleted ? 0.55 : 1,
+                  boxShadow: isActive ? `0 0 6px 2px ${step.activeColor}66` : "none",
+                }}
+              />
+            </div>
+            {!isLast && (
+              <div
+                className="h-px flex-1 transition-all duration-300"
+                style={{
+                  backgroundColor: isCompleted ? STEP_CONFIG[i].activeColor : "#374151",
+                  opacity: isCompleted ? 0.4 : 1,
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function RbsSessionRow({ label, snapshot }: { label: string; snapshot: RbsStageSnapshot | null }) {
   if (!snapshot) {
     return (
@@ -80,12 +146,22 @@ function RbsSessionRow({ label, snapshot }: { label: string; snapshot: RbsStageS
     <div className="grid grid-cols-[32px_1fr_1fr] gap-x-2 items-start">
       <span className="text-[10px] text-muted-foreground uppercase font-mono font-bold pt-0.5">{label}</span>
       <div>
-        <div className="text-[9px] text-muted-foreground uppercase font-mono mb-0.5">Short</div>
-        <div className={cn("text-[10px] font-mono leading-tight", short.colorClass)}>{short.label}</div>
+        <div className="text-[9px] text-muted-foreground uppercase font-mono mb-1">Short</div>
+        <StageTracker
+          stage={snapshot.shortStage}
+          pending={snapshot.shortPending}
+          signalFired={snapshot.shortSignalFired}
+        />
+        <div className={cn("text-[9px] font-mono leading-tight mt-1", short.colorClass)}>{short.label}</div>
       </div>
       <div>
-        <div className="text-[9px] text-muted-foreground uppercase font-mono mb-0.5">Long</div>
-        <div className={cn("text-[10px] font-mono leading-tight", long.colorClass)}>{long.label}</div>
+        <div className="text-[9px] text-muted-foreground uppercase font-mono mb-1">Long</div>
+        <StageTracker
+          stage={snapshot.longStage}
+          pending={snapshot.longPending}
+          signalFired={snapshot.longSignalFired}
+        />
+        <div className={cn("text-[9px] font-mono leading-tight mt-1", long.colorClass)}>{long.label}</div>
       </div>
     </div>
   );
