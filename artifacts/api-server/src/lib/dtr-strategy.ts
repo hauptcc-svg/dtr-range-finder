@@ -142,16 +142,22 @@ export function computeAtr14(bars: Bar[]): number | null {
  * Step the SHORT state machine forward by one bar.
  * `pending` is reset to false at the start of each bar; it is only true if
  * BOS fires on THIS specific bar (consumed → place entry on next bar open).
+ *
+ * FVG gate (stage 1→2): the bias candle must leave a true price gap below the
+ * preceding bar — its HIGH must be strictly below the prevBar's LOW.  Pass
+ * prevBar=null to skip the gap check (e.g. first bar in sequence).
  */
 export function stepShortMachine(
   machine: RbsStateMachine,
   bar: Bar,
+  prevBar: Bar | null,
   rangeHigh: number,
   atr14: number,
   fvgSizeMult: number,
 ): RbsStateMachine {
   const m: RbsStateMachine = { ...machine, pending: false };
   const bigBear = bar.c < bar.o && (bar.o - bar.c) >= fvgSizeMult * atr14;
+  const hasFvgGap = prevBar === null || bar.h < prevBar.l;
 
   switch (m.stage) {
     case 0:
@@ -159,7 +165,7 @@ export function stepShortMachine(
       break;
 
     case 1:
-      if (bigBear) {
+      if (bigBear && hasFvgGap) {
         m.stage = 2;
         m.bcHigh = bar.h;
         m.bcLow = bar.l;
@@ -200,16 +206,22 @@ export function stepShortMachine(
 
 /**
  * Step the LONG state machine forward by one bar.
+ *
+ * FVG gate (stage 1→2): the bias candle must leave a true price gap above the
+ * preceding bar — its LOW must be strictly above the prevBar's HIGH.  Pass
+ * prevBar=null to skip the gap check (e.g. first bar in sequence).
  */
 export function stepLongMachine(
   machine: RbsStateMachine,
   bar: Bar,
+  prevBar: Bar | null,
   rangeLow: number,
   atr14: number,
   fvgSizeMult: number,
 ): RbsStateMachine {
   const m: RbsStateMachine = { ...machine, pending: false };
   const bigBull = bar.c > bar.o && (bar.c - bar.o) >= fvgSizeMult * atr14;
+  const hasFvgGap = prevBar === null || bar.l > prevBar.h;
 
   switch (m.stage) {
     case 0:
@@ -217,7 +229,7 @@ export function stepLongMachine(
       break;
 
     case 1:
-      if (bigBull) {
+      if (bigBull && hasFvgGap) {
         m.stage = 2;
         m.bcHigh = bar.h;
         m.bcLow = bar.l;
@@ -308,9 +320,11 @@ export function buildRbsSession(
   let shortMachine = makeMachine();
   let longMachine  = makeMachine();
 
+  let prevBar: Bar | null = null;
   for (const bar of breakBars) {
-    shortMachine = stepShortMachine(shortMachine, bar, rangeHigh, atr14, fvgSizeMult);
-    longMachine  = stepLongMachine(longMachine,  bar, rangeLow,  atr14, fvgSizeMult);
+    shortMachine = stepShortMachine(shortMachine, bar, prevBar, rangeHigh, atr14, fvgSizeMult);
+    longMachine  = stepLongMachine(longMachine,  bar, prevBar, rangeLow,  atr14, fvgSizeMult);
+    prevBar = bar;
   }
 
   // Build signals from pending machines

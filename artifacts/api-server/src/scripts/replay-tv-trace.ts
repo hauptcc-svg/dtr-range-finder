@@ -154,11 +154,13 @@ function runReplay() {
   let shortM: RbsStateMachine = makeMachine();
   let longM:  RbsStateMachine = makeMachine();
   let prevBcBodyBot: number | null = null;
+  let prevBreakBar: typeof breakBars[0] | null = null;
 
   for (let i = 0; i < breakBars.length; i++) {
     const bbar = breakBars[i];
-    shortM = stepShortMachine(shortM, bbar, rangeHigh, atr14, FVG_SIZE_MULT);
-    longM  = stepLongMachine(longM,  bbar, rangeLow,  atr14, FVG_SIZE_MULT);
+    shortM = stepShortMachine(shortM, bbar, prevBreakBar, rangeHigh, atr14, FVG_SIZE_MULT);
+    longM  = stepLongMachine(longM,  bbar, prevBreakBar, rangeLow,  atr14, FVG_SIZE_MULT);
+    prevBreakBar = bbar;
 
     const ex = tvFix.breakBarTrace[i];
     const stageOk   = shortM.stage   === ex?.shortMachine.stage;

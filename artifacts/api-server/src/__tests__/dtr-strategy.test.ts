@@ -54,7 +54,8 @@ function replayShort(
   let m = makeMachine();
   const signals: Array<{ barIdx: number; machine: RbsStateMachine }> = [];
   for (let i = 0; i < bars.length; i++) {
-    m = stepShortMachine(m, bars[i], rangeHigh, atr14, fvgSizeMult);
+    const prevBar = i > 0 ? bars[i - 1] : null;
+    m = stepShortMachine(m, bars[i], prevBar, rangeHigh, atr14, fvgSizeMult);
     if (m.pending) signals.push({ barIdx: i, machine: { ...m } });
   }
   return { machine: m, signals };
@@ -70,7 +71,8 @@ function replayLong(
   let m = makeMachine();
   const signals: Array<{ barIdx: number; machine: RbsStateMachine }> = [];
   for (let i = 0; i < bars.length; i++) {
-    m = stepLongMachine(m, bars[i], rangeLow, atr14, fvgSizeMult);
+    const prevBar = i > 0 ? bars[i - 1] : null;
+    m = stepLongMachine(m, bars[i], prevBar, rangeLow, atr14, fvgSizeMult);
     if (m.pending) signals.push({ barIdx: i, machine: { ...m } });
   }
   return { machine: m, signals };
@@ -112,15 +114,16 @@ const MULT = 1.5; // fvgSizeMult — bias candle body must be >= 15 pts
 describe("SHORT machine — happy-path 4-bar flow (PineScript rbs2sStg trace)", () => {
   /**
    * PineScript trace (SHORT, RH=100, ATR=10, mult=1.5):
-   *   Bar 0: close=101 > r2H(100) → rbs2sStg := 1   [Pine line 316]
-   *   Bar 1: bigBearCandle (body=16 ≥ 15) → rbs2sStg := 2,
+   *   Bar 0: close=107 > r2H(100) → rbs2sStg := 1   [Pine line 316]
+   *           l=105 > bias.h=104 → FVG gate will pass for bias candle
+   *   Bar 1: bigBearCandle (body=16 ≥ 15) AND FVG gap (h=104 < prevBar.l=105) → rbs2sStg := 2,
    *           rbs2sBcH=104, rbs2sBcL=90, rbs2sBcBT=103, rbs2sBcBB=87  [Pine line 321-325]
    *   Bar 2: high(88) >= rbs2sBcBB(87), close(88) NOT < 87 → rbs2sStg := 3  [Pine line 339]
    *   Bar 3: close(85) < rbs2sBcBB(87) → rbs2sPend := true, rbs2sStg := 0  [Pine line 346-348]
    */
   const bars = [
-    bar(99, 102, 98, 101),   // Bar 0: sweep
-    bar(103, 104, 90, 87),   // Bar 1: bias candle, body=16
+    bar(103, 110, 105, 107), // Bar 0: sweep (close=107>RH=100, l=105 > bias.h=104 → FVG ✓)
+    bar(103, 104, 90, 87),   // Bar 1: bias candle, body=16, h=104 < prevBar.l=105 ✓
     bar(90, 88, 85, 88),     // Bar 2: retest — high(88)≥87, close(88) not<87 → stage 3
     bar(88, 89, 84, 85),     // Bar 3: BOS — close(85)<87
   ];
@@ -154,15 +157,15 @@ describe("SHORT machine — happy-path 4-bar flow (PineScript rbs2sStg trace)", 
 describe("LONG machine — happy-path 4-bar flow (PineScript rbl2lStg trace)", () => {
   /**
    * PineScript trace (LONG, RL=90, ATR=10, mult=1.5):
-   *   Bar 0: close=89 < r2L(90) → rbl2lStg := 1   [Pine line 365]
-   *   Bar 1: bigBullCandle (body=16 ≥ 15) → rbl2lStg := 2,
+   *   Bar 0: close=82 < r2L(90) → rbl2lStg := 1; h=83 < bias.l=84 → FVG gate will pass
+   *   Bar 1: bigBullCandle (body=16 ≥ 15) AND FVG gap (l=84 > prevBar.h=83) → rbl2lStg := 2,
    *           rbl2lBcH=88, rbl2lBcL=84, rbl2lBcBT=101, rbl2lBcBB=85  [Pine line 370-374]
    *   Bar 2: low(94) <= rbl2lBcBT(101), close(95) NOT > 101 → rbl2lStg := 3  [Pine line 387]
    *   Bar 3: close(103) > rbl2lBcBT(101) → rbl2lPend := true, rbl2lStg := 0  [Pine line 395-397]
    */
   const bars = [
-    bar(91, 93, 88, 89),     // Bar 0: sweep — close(89)<RL(90)
-    bar(85, 88, 84, 101),    // Bar 1: bull candle, body=16
+    bar(83, 83, 80, 82),     // Bar 0: sweep (close=82<RL=90, h=83 < bias.l=84 → FVG ✓)
+    bar(85, 88, 84, 101),    // Bar 1: bull candle, body=16, l=84 > prevBar.h=83 ✓
     bar(99, 99, 94, 95),     // Bar 2: retest — low(94)≤101, close(95) not>101 → stage 3
     bar(95, 103, 93, 103),   // Bar 3: BOS — close(103)>101
   ];
@@ -198,8 +201,8 @@ describe("SHORT — same-candle retest+BOS skips stage 3 [Pine lines 332-337]", 
    *          (stage 3 is never entered)
    */
   const bars = [
-    bar(99, 102, 98, 101),   // Bar 0: sweep
-    bar(103, 104, 90, 87),   // Bar 1: bias candle — bcBodyBot=87
+    bar(103, 110, 105, 107), // Bar 0: sweep (close=107>RH=100, l=105 > bias.h=104 → FVG ✓)
+    bar(103, 104, 90, 87),   // Bar 1: bias candle — bcBodyBot=87, h=104 < prevBar.l=105 ✓
     bar(90, 90, 83, 83),     // Bar 2: high(90)≥87 AND close(83)<87 → instant BOS
   ];
 
@@ -228,8 +231,8 @@ describe("LONG — same-candle retest+BOS skips stage 3 [Pine lines 381-385]", (
    *          → rbl2lPend := true, rbl2lStg := 0   [Pine lines 381-384]
    */
   const bars = [
-    bar(91, 93, 88, 89),     // Bar 0: sweep
-    bar(85, 88, 84, 101),    // Bar 1: bias candle — bcBodyTop=101
+    bar(83, 83, 80, 82),     // Bar 0: sweep (close=82<RL=90, h=83 < bias.l=84 → FVG ✓)
+    bar(85, 88, 84, 101),    // Bar 1: bias candle — bcBodyTop=101, l=84 > prevBar.h=83 ✓
     bar(99, 108, 94, 108),   // Bar 2: low(94)≤101 AND close(108)>101 → instant BOS
   ];
 
@@ -253,8 +256,8 @@ describe("SHORT — far-side close resets stage 1 [Pine lines 351-358]", () => {
    *   Bar 3: close(105) > rbs2sBcH(104) → rbs2sStg := 1, clear BC  [Pine lines 352-357]
    */
   const bars = [
-    bar(99, 102, 98, 101),   // Bar 0: sweep
-    bar(103, 104, 90, 87),   // Bar 1: bias candle — bcHigh=104
+    bar(103, 110, 105, 107), // Bar 0: sweep (close=107>RH=100, l=105 > bias.h=104 → FVG ✓)
+    bar(103, 104, 90, 87),   // Bar 1: bias candle — bcHigh=104, h=104 < prevBar.l=105 ✓
     bar(90, 88, 85, 88),     // Bar 2: retest → stage 3
     bar(88, 106, 88, 105),   // Bar 3: close(105) > bcHigh(104) → invalidation
   ];
@@ -278,13 +281,15 @@ describe("SHORT — far-side close resets stage 1 [Pine lines 351-358]", () => {
   });
 
   test("new bias candle accepted at stage 1 after reset (no re-sweep needed)", () => {
+    // prevBar of recovery = invalidation bar (h=106). Need recovery.h < 106.
+    // bar(87,87,67,72): body=15≥15 ✓, h=87 < prevBar.l=88 ✓ (FVG: h=87 < invalidation.l=88)
     const barsWithRecovery = [
       ...bars,
-      bar(107, 108, 90, 87),  // Bar 4: bigBear (body=20≥15) accepted at stage 1 → stage 2
+      bar(87, 87, 67, 72),  // Bar 4: bigBear (body=15≥15) with FVG → stage 2
     ];
     const { machine } = replayShort(barsWithRecovery, RH, ATR, MULT);
     assert.equal(machine.stage, 2, "new bias candle advances to stage 2");
-    assert.equal(machine.bcHigh, 108);
+    assert.equal(machine.bcHigh, 87);
   });
 });
 
@@ -301,8 +306,8 @@ describe("LONG — far-side close resets stage 1 [Pine lines 400-406]", () => {
    *   Bar 3: close(83) < rbl2lBcL(84) → rbl2lStg := 1, clear BC  [Pine lines 401-405]
    */
   const bars = [
-    bar(91, 93, 88, 89),     // Bar 0: sweep
-    bar(85, 88, 84, 101),    // Bar 1: bias candle — bcLow=84
+    bar(83, 83, 80, 82),     // Bar 0: sweep (close=82<RL=90, h=83 < bias.l=84 → FVG ✓)
+    bar(85, 88, 84, 101),    // Bar 1: bias candle — bcLow=84, l=84 > prevBar.h=83 ✓
     bar(99, 99, 94, 95),     // Bar 2: retest → stage 3
     bar(95, 96, 82, 83),     // Bar 3: close(83) < bcLow(84) → invalidation
   ];
@@ -338,17 +343,18 @@ describe("Bias-candle body size gate [Pine lines 135-136]", () => {
 
   test("SHORT: undersized bear candle (body=14 < 15) is ignored — stage stays at 1", () => {
     const bars = [
-      bar(99, 102, 98, 101),  // sweep → stage 1
-      bar(103, 104, 90, 89),  // body = 103-89 = 14 < 15 → rejected
+      bar(103, 110, 105, 107), // sweep → stage 1 (l=105 > bias.h needed)
+      bar(103, 104, 90, 89),   // body = 103-89 = 14 < 15 → rejected (body gate fails first)
     ];
     const { machine } = replayShort(bars, RH, ATR, MULT);
     assert.equal(machine.stage, 1);
   });
 
   test("SHORT: on-threshold bear candle (body=15 === threshold) is accepted → stage 2", () => {
+    // bias: o=103, h=104, l=88, c=88; body=15. prevBar.l=105 > h=104 → FVG ✓
     const bars = [
-      bar(99, 102, 98, 101),  // sweep → stage 1
-      bar(103, 104, 88, 88),  // body = 103-88 = 15 ≥ 15 → accepted
+      bar(103, 110, 105, 107), // sweep (l=105 > bias.h=104 → FVG ✓)
+      bar(103, 104, 88, 88),   // body = 103-88 = 15 ≥ 15 → accepted
     ];
     const { machine } = replayShort(bars, RH, ATR, MULT);
     assert.equal(machine.stage, 2);
@@ -356,16 +362,17 @@ describe("Bias-candle body size gate [Pine lines 135-136]", () => {
 
   test("LONG: undersized bull candle (body=13 < 15) is ignored — stage stays at 1", () => {
     const bars = [
-      bar(91, 93, 88, 89),    // sweep → stage 1
-      bar(85, 88, 85, 98),    // body = 98-85 = 13 < 15 → rejected
+      bar(83, 83, 80, 82),    // sweep → stage 1 (h=83 < bias.l needed)
+      bar(85, 88, 85, 98),    // body = 98-85 = 13 < 15 → rejected (body gate fails first)
     ];
     const { machine } = replayLong(bars, RL, ATR, MULT);
     assert.equal(machine.stage, 1);
   });
 
   test("LONG: on-threshold bull candle (body=15 === threshold) is accepted → stage 2", () => {
+    // bias: o=85, h=88, l=84, c=100; body=15. prevBar.h=83 < l=84 → FVG ✓
     const bars = [
-      bar(91, 93, 88, 89),    // sweep → stage 1
+      bar(83, 83, 80, 82),    // sweep (h=83 < bias.l=84 → FVG ✓)
       bar(85, 88, 84, 100),   // body = 100-85 = 15 ≥ 15 → accepted
     ];
     const { machine } = replayLong(bars, RL, ATR, MULT);
@@ -387,14 +394,14 @@ describe("Stage 0 processes only sweep — bigBear/bigBull not checked in stage 
     // body=19 ≥ 15, but stage 0 only checks sweep condition
     const sweepAndBigBear = bar(120, 122, 98, 101); // close(101)>RH(100), body=19
     let m = makeMachine();
-    m = stepShortMachine(m, sweepAndBigBear, RH, ATR, MULT);
+    m = stepShortMachine(m, sweepAndBigBear, null, RH, ATR, MULT);
     assert.equal(m.stage, 1, "sweep fires in stage 0; bigBear is tested separately in stage 1");
   });
 
   test("LONG: big bull sweep candle stops at stage 1, not stage 2", () => {
     const sweepAndBigBull = bar(75, 93, 74, 88); // close(88)<RL(90)
     let m = makeMachine();
-    m = stepLongMachine(m, sweepAndBigBull, RL, ATR, MULT);
+    m = stepLongMachine(m, sweepAndBigBull, null, RL, ATR, MULT);
     assert.equal(m.stage, 1);
   });
 });
@@ -407,7 +414,7 @@ describe("Machine immutability — step functions return new objects", () => {
   test("stepShortMachine does not mutate its input", () => {
     const initial = makeMachine();
     const before = { ...initial };
-    const result = stepShortMachine(initial, bar(99, 102, 98, 101), RH, ATR, MULT);
+    const result = stepShortMachine(initial, bar(99, 102, 98, 101), null, RH, ATR, MULT);
     assert.deepEqual(initial, before, "input machine unchanged");
     assert.equal(result.stage, 1, "returned machine has new state");
   });
@@ -415,7 +422,7 @@ describe("Machine immutability — step functions return new objects", () => {
   test("stepLongMachine does not mutate its input", () => {
     const initial = makeMachine();
     const before = { ...initial };
-    const result = stepLongMachine(initial, bar(91, 93, 88, 89), RL, ATR, MULT);
+    const result = stepLongMachine(initial, bar(91, 93, 88, 89), null, RL, ATR, MULT);
     assert.deepEqual(initial, before);
     assert.equal(result.stage, 1);
   });
@@ -465,12 +472,14 @@ describe("SHORT — machine re-arms after BOS fires (stage 0 reset → next swee
    * fresh sweep on the very next bar and run a complete second cycle.
    */
   test("two complete SHORT cycles produce exactly two signals", () => {
+    // cycle sweep: close=107>RH=100, l=105 > bias.h=104 → FVG ✓ for both cycles
     const cycle = [
-      bar(99, 102, 98, 101),  // sweep
-      bar(103, 104, 90, 87),  // bias
-      bar(90, 88, 85, 88),    // retest
-      bar(88, 89, 84, 85),    // BOS
+      bar(103, 110, 105, 107), // sweep (l=105 > bias.h=104 → FVG ✓)
+      bar(103, 104, 90, 87),   // bias (h=104 < prevBar.l=105 ✓)
+      bar(90, 88, 85, 88),     // retest
+      bar(88, 89, 84, 85),     // BOS
     ];
+    // In cycle 2: sweep prevBar=BOS bar (l=84). sweep.l=105 > bias.h=104 ✓ still holds.
     const { signals } = replayShort([...cycle, ...cycle], RH, ATR, MULT);
     assert.equal(signals.length, 2);
     assert.equal(signals[0].barIdx, 3);
@@ -516,8 +525,8 @@ describe("buildRbsSession — integration (range isolation + signal construction
   // rangeHigh=102, rangeLow=98
 
   const breakBarsShort: Bar[] = [
-    bar(100, 105, 99, 103, BREAK_START + 0),  // sweep: close(103) > rangeHigh(102) → stage 1
-    bar(120, 122, 100, 100, BREAK_START + 1), // bigBear: body=120-100=20, bcHigh=122, bcBodyBot=100
+    bar(120, 130, 123, 125, BREAK_START + 0), // sweep: close(125) > rangeHigh(102) → stage 1; l=123 > bias.h=122 → FVG ✓
+    bar(120, 122, 100, 100, BREAK_START + 1), // bigBear: body=20, h=122 < prevBar.l=123 ✓, bcHigh=122, bcBodyBot=100
     bar(100, 101, 98, 101, BREAK_START + 2),  // retest: h(101)≥bcBodyBot(100), c(101) not<100 → stage 3
     bar(101, 102, 97, 99, BREAK_START + 3),   // BOS: close(99)<bcBodyBot(100) → pending
   ];
@@ -683,7 +692,8 @@ describe("PineScript fixture parity — SHORT 2AM session trace", () => {
 
     let m = makeMachine();
     for (let i = 0; i < breakBars.length; i++) {
-      m = stepShortMachine(m, breakBars[i], rangeHigh, atr14!, params.fvgSizeMult);
+      const prevBar = i > 0 ? breakBars[i - 1] : null;
+      m = stepShortMachine(m, breakBars[i], prevBar, rangeHigh, atr14!, params.fvgSizeMult);
       const expected = trace[i];
       assert.equal(m.stage, expected.stage,
         `bar ${i} (t=${breakBars[i].t}, role=${expected.role}): stage should be ${expected.stage}`);
@@ -764,7 +774,8 @@ describe("PineScript fixture parity — LONG 2AM session trace", () => {
 
     let m = makeMachine();
     for (let i = 0; i < breakBars.length; i++) {
-      m = stepLongMachine(m, breakBars[i], rangeLow, atr14!, params.fvgSizeMult);
+      const prevBar = i > 0 ? breakBars[i - 1] : null;
+      m = stepLongMachine(m, breakBars[i], prevBar, rangeLow, atr14!, params.fvgSizeMult);
       const expected = trace[i];
       assert.equal(m.stage, expected.stage,
         `bar ${i} (t=${breakBars[i].t}, role=${expected.role}): stage should be ${expected.stage}`);
@@ -927,110 +938,64 @@ describe("CSV bar replay — TradingView alert cross-check (NQ 2AM 2025-04-17)",
       b => b.t >= CSV_BREAK_START_MS && b.t < CSV_BREAK_END_MS,
     );
     let m = makeMachine();
-    m = stepShortMachine(m, breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
+    // prevBar=null for first break bar (no preceding bar in break window)
+    m = stepShortMachine(m, breakBars[0], null, rangeHigh, atr14, CSV_FVG_MULT);
     const ex = tvAlerts.breakBarTrace[0];
     assert.equal(m.stage,   ex.shortMachine.stage,   `bar 0 (${ex.role}): stage`);
     assert.equal(m.pending, ex.shortMachine.pending,  `bar 0 (${ex.role}): pending`);
   });
 
-  test("bias candle recorded at break bar 1 (02:14 EDT) [Pine lines 320-326: rbs2sStg=2, bcBB=19380]", () => {
+  test("bias candle at bar 1 is REJECTED by strict FVG gap check — stage stays at 1", () => {
+    // NQ 02:14 bar: h=19440. Sweep bar 0: l=19404.
+    // FVG gate requires bias.h < sweep.l → 19440 < 19404? NO → rejected.
+    // Stage stays at 1 despite the large bearish body (body=48 ≥ threshold).
     const atr14     = computeAtr14(csvBars)!;
     const rangeHigh = tvAlerts.computed.rangeHigh;
     const breakBars = csvBars.filter(
       b => b.t >= CSV_BREAK_START_MS && b.t < CSV_BREAK_END_MS,
     );
     let m = makeMachine();
-    m = stepShortMachine(m, breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
-    m = stepShortMachine(m, breakBars[1], rangeHigh, atr14, CSV_FVG_MULT);
-    const ex = tvAlerts.breakBarTrace[1];
-    // body = 19428 - 19380 = 48, threshold ≈ 35.04 → accepted
-    assert.equal(m.stage,     ex.shortMachine.stage,           `bar 1 (${ex.role}): stage`);
-    assert.equal(m.bcHigh,    19440, "bcHigh = bar high of bias candle");
-    assert.equal(m.bcLow,     19370, "bcLow  = bar low of bias candle");
-    assert.equal(m.bcBodyTop, 19428, "bcBodyTop = open (bearish)");
-    assert.equal(m.bcBodyBot, ex.shortMachine.bcBodyBot, `bar 1 (${ex.role}): bcBodyBot`);
-    assert.equal(m.pending,   ex.shortMachine.pending,   `bar 1 (${ex.role}): pending`);
+    m = stepShortMachine(m, breakBars[0], null,         rangeHigh, atr14, CSV_FVG_MULT);
+    m = stepShortMachine(m, breakBars[1], breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
+    // FVG fails: bias.h(19440) is NOT < sweep.l(19404) → stage stays 1
+    assert.equal(m.stage,   1, "stage must stay 1 when FVG gap is not present");
+    assert.equal(m.bcHigh,  null, "bcHigh must remain null (bias rejected)");
+    assert.equal(m.pending, false, "no signal fires");
   });
 
-  test("retest wick at break bar 2 (02:15 EDT) advances to stage 3 [Pine line 339]", () => {
+  test("SHORT machine stays at stage 1 through all 4 break bars (FVG gap absent)", () => {
     const atr14     = computeAtr14(csvBars)!;
     const rangeHigh = tvAlerts.computed.rangeHigh;
     const breakBars = csvBars.filter(
       b => b.t >= CSV_BREAK_START_MS && b.t < CSV_BREAK_END_MS,
     );
     let m = makeMachine();
-    m = stepShortMachine(m, breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
-    m = stepShortMachine(m, breakBars[1], rangeHigh, atr14, CSV_FVG_MULT);
-    m = stepShortMachine(m, breakBars[2], rangeHigh, atr14, CSV_FVG_MULT);
-    const ex = tvAlerts.breakBarTrace[2];
-    // h(19383) >= bcBB(19380), close(19382) NOT < 19380 → stage 3
-    assert.equal(m.stage,   ex.shortMachine.stage,   `bar 2 (${ex.role}): stage`);
-    assert.equal(m.pending, ex.shortMachine.pending,  `bar 2 (${ex.role}): pending`);
+    for (let i = 0; i < 4; i++) {
+      const prevBar = i > 0 ? breakBars[i - 1] : null;
+      m = stepShortMachine(m, breakBars[i], prevBar, rangeHigh, atr14, CSV_FVG_MULT);
+    }
+    assert.equal(m.stage,   1, "machine stuck at stage 1 — FVG filter blocked bias candle");
+    assert.equal(m.pending, false, "no BOS fires");
   });
 
-  test("BOS fires at break bar 3 (02:16 EDT) [Pine lines 345-348: rbs2sPend=true, rbsSlH=19440]", () => {
-    const atr14     = computeAtr14(csvBars)!;
-    const rangeHigh = tvAlerts.computed.rangeHigh;
-    const breakBars = csvBars.filter(
-      b => b.t >= CSV_BREAK_START_MS && b.t < CSV_BREAK_END_MS,
-    );
-    let m = makeMachine();
-    m = stepShortMachine(m, breakBars[0], rangeHigh, atr14, CSV_FVG_MULT);
-    m = stepShortMachine(m, breakBars[1], rangeHigh, atr14, CSV_FVG_MULT);
-    m = stepShortMachine(m, breakBars[2], rangeHigh, atr14, CSV_FVG_MULT);
-    m = stepShortMachine(m, breakBars[3], rangeHigh, atr14, CSV_FVG_MULT);
-    const ex = tvAlerts.breakBarTrace[3];
-    // close(19376) < bcBB(19380) → BOS
-    assert.equal(m.pending,  ex.shortMachine.pending,               `bar 3 (${ex.role}): pending`);
-    assert.equal(m.stage,    ex.shortMachine.stage,                 `bar 3 (${ex.role}): stage`);
-    assert.equal(m.slSource, ex.shortMachine.slSource,              `bar 3 (${ex.role}): slSource`);
-  });
-
-  test("LONG machine produces no signal (bias bar sweeps LONG but no bull candle follows)", () => {
-    // Bias bar close=19380 < rangeLow=19388 triggers a LONG sweep at bar 1.
-    // Bars 2-3 are bearish or too small → LONG stays at stage 1, no signal fires.
+  test("LONG machine produces no signal (no qualifying bull candle in break window)", () => {
     const result = buildRbsSession(
       csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
       CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
     );
     assert.equal(result.longSignal, null,
-      "LONG sweeps at bar 1 (close=19380 < rangeLow=19388) but no qualifying bull candle → null");
+      "No bull bias candle with FVG gap → LONG signal null");
   });
 
-  test("buildRbsSession direction matches TV alert fixture", () => {
+  test("buildRbsSession SHORT signal is null (FVG gap filter blocks the NQ 02:14 bias candle)", () => {
+    // The NQ 2025-04-17 session would have fired under the old loose check but the
+    // strict FVG requirement (bias.h < sweep.l) is NOT satisfied (19440 ≥ 19404).
     const result = buildRbsSession(
       csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
       CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
     );
-    assert.ok(result.shortSignal !== null, "shortSignal must not be null");
-    assert.equal(result.shortSignal!.direction, tvAlerts.alert.direction);
-  });
-
-  test("stopPrice matches TV alert fixture (slSource + slMult×ATR, rounded to tick)", () => {
-    const result = buildRbsSession(
-      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
-      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
-    );
-    assert.equal(result.shortSignal!.stopPrice, tvAlerts.alert.stopPrice,
-      `stopPrice must match alert fixture (${tvAlerts.alert.stopPrice})`);
-  });
-
-  test("tp1Price matches TV alert fixture (rangeLow — opposing boundary) [Pine: tp = r2L]", () => {
-    const result = buildRbsSession(
-      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
-      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
-    );
-    assert.equal(result.shortSignal!.tp1Price, tvAlerts.alert.tp1Price,
-      `tp1Price must match alert fixture (${tvAlerts.alert.tp1Price})`);
-  });
-
-  test("slSource matches TV alert fixture (bcHigh of bias candle)", () => {
-    const result = buildRbsSession(
-      csvBars, CSV_RANGE_END_MS, CSV_BREAK_START_MS, CSV_BREAK_END_MS,
-      CSV_FVG_MULT, CSV_SL_MULT, CSV_CURRENT_PRICE, CSV_MIN_TICK,
-    );
-    assert.equal(result.shortMachine.slSource, tvAlerts.alert.slSource,
-      `slSource must match alert fixture (${tvAlerts.alert.slSource})`);
+    assert.equal(result.shortSignal, null,
+      "shortSignal must be null — strict FVG gap not present between sweep and bias candle");
   });
 });
 
@@ -1144,51 +1109,63 @@ describe("roundToTick — negative prices (e.g. spread or inverted instrument)",
 //
 // is validated end-to-end against independently hand-computed expected values.
 //
-// SHORT uses the real CSV bar set (NQ 2AM 2025-04-17):
-//   ATR14      = 327 / 14 ≈ 23.3571
-//   bcHigh     = 19440  (bias candle high recorded at break bar 1)
-//   stopPrice  = roundToTick(19440 + 23.3571, 0.25)
-//              = roundToTick(19463.3571, 0.25) = 19463.25
+// SHORT uses the synthetic short-fixture bar set (rbs-short-session-trace.json).
+// Note: CSV bars (NQ 2AM 2025-04-17) no longer produce a signal because the strict
+// FVG gap check fails (bias.h=19440 ≥ sweep.l=19404).
+//   ATR14      = 252 / 14 = 18.0
+//   bcHigh     = 19080  (bias candle high, slSource from the SHORT fixture)
+//   stopPrice  = roundToTick(19080 + 18.0, 0.25)
+//              = roundToTick(19098.0, 0.25) = 19098.0
 //
-// LONG uses the synthetic long-fixture bar set (rbs-long-session-trace.json):
-//   ATR14      = 423 / 14 ≈ 30.2143
+// LONG uses the synthetic long-fixture bar set (rbs-long-session-trace.json)
+// with updated sweep bar (h=18934 < bias.l=18935 → FVG ✓):
+//   ATR14      = 480 / 14 ≈ 34.286
 //   bcLow      = 18935  (bias candle low, slSource from the LONG fixture)
-//   stopPrice  = roundToTick(18935 − 30.2143, 0.25)
-//              = roundToTick(18904.7857, 0.25) = 18904.75
+//   stopPrice  = roundToTick(18935 − 34.286, 0.25)
+//              = roundToTick(18900.714, 0.25) = 18900.75
 
 describe("ATR-multiplied stop-loss distance — slMult=1.0 end-to-end", () => {
-  test("SHORT stopPrice = roundToTick(bcHigh + 1.0 × ATR, minTick) using CSV bars", () => {
-    const atr14 = computeAtr14(csvBars);
-    assert.ok(atr14 !== null, "ATR must be computable from 65 CSV bars");
+  test("SHORT stopPrice = roundToTick(bcHigh + 1.0 × ATR, minTick) using short-fixture bars", () => {
+    // CSV bars no longer produce a SHORT signal because the NQ 2025-04-17 session
+    // does not satisfy the strict FVG gap (bias.h=19440 ≥ sweep.l=19404).
+    // Use the short-fixture bars which are designed to pass all gates including FVG.
+    //
+    // Short fixture ATR: last 14 TRs = 10×10(range) + 70(sweep) + 58(bias) + 10(retest) + 14(BOS)
+    //                  = 252/14 = 18.0
+    // bcHigh (slSource) = 19080
+    // stopPrice = roundToTick(19080 + 1.0 × 18.0, 0.25) = roundToTick(19098, 0.25) = 19098.0
+    const { params, bars } = shortFixture;
+    const atr14 = computeAtr14(bars);
+    assert.ok(atr14 !== null, "ATR must be computable from short-fixture bars");
 
     const result = buildRbsSession(
-      csvBars,
-      CSV_RANGE_END_MS,
-      CSV_BREAK_START_MS,
-      CSV_BREAK_END_MS,
-      CSV_FVG_MULT,
-      1.0,             // slMult = 1.0 (non-zero, exercises ATR offset)
-      CSV_CURRENT_PRICE,
-      CSV_MIN_TICK,
+      bars,
+      params.rangeEndMs,
+      params.breakStartMs,
+      params.breakEndMs,
+      params.fvgSizeMult,
+      1.0,             // slMult = 1.0 (overrides fixture default of 0)
+      params.currentPrice,
+      params.minTick,
     );
 
-    assert.ok(result.shortSignal !== null, "SHORT BOS must fire for the CSV session");
+    assert.ok(result.shortSignal !== null, "SHORT BOS must fire for the short-fixture session");
 
     // Independently compute expected stop: bcHigh + 1.0 × ATR rounded to 0.25
     const bcHigh = result.shortMachine.slSource!;
-    const expected = Math.round((bcHigh + 1.0 * atr14!) / CSV_MIN_TICK) * CSV_MIN_TICK;
+    const expected = Math.round((bcHigh + 1.0 * atr14!) / params.minTick) * params.minTick;
 
     assert.equal(
       result.shortSignal!.stopPrice,
       expected,
-      `stopPrice must equal roundToTick(${bcHigh} + 1.0 × ${atr14}, ${CSV_MIN_TICK}) = ${expected}`,
+      `stopPrice must equal roundToTick(${bcHigh} + 1.0 × ${atr14}, ${params.minTick}) = ${expected}`,
     );
 
-    // Also verify the sub-cent exact value derived from the known ATR (327/14)
+    // Also verify the exact value derived from the known ATR (252/14 = 18)
     assert.equal(
       result.shortSignal!.stopPrice,
-      19463.25,
-      "stopPrice must be 19463.25 (roundToTick(19440 + 327/14, 0.25))",
+      19098.0,
+      "stopPrice must be 19098.0 (roundToTick(19080 + 252/14, 0.25))",
     );
   });
 
@@ -1220,11 +1197,16 @@ describe("ATR-multiplied stop-loss distance — slMult=1.0 end-to-end", () => {
       `stopPrice must equal roundToTick(${bcLow} − 1.0 × ${atr14}, ${params.minTick}) = ${expected}`,
     );
 
-    // Also verify the sub-cent exact value derived from the known ATR (423/14)
+    // Verify the exact value derived from the known ATR (480/14 ≈ 34.286)
+    // Sweep bar updated to h=18934 < bias.l=18935 → FVG ✓; new sweep TR=80 (was 27)
+    // New sweep close=18928 (was 18988) → bias TR changes too:
+    //   New bias TR: prev_c=18928, max(50, |18985-18928|=57, |18935-18928|=7) = 57 (was 53)
+    // New ATR sum = 10×30(range) + 80(sweep) + 57(bias) + 20(retest) + 23(BOS) = 480/14 ≈ 34.286
+    // stopPrice = roundToTick(18935 − 480/14, 0.25) = roundToTick(18900.714, 0.25) = 18900.75
     assert.equal(
       result.longSignal!.stopPrice,
-      18904.75,
-      "stopPrice must be 18904.75 (roundToTick(18935 − 423/14, 0.25))",
+      18900.75,
+      "stopPrice must be 18900.75 (roundToTick(18935 − 480/14, 0.25))",
     );
   });
 });

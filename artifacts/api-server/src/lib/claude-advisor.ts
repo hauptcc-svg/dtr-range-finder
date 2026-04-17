@@ -59,16 +59,16 @@ function buildDTRPrompt(
     })
     .join("\n\n");
 
-  return `You are a professional futures trader specializing in the DTR (Draw The Range) strategy.
+  return `You are a professional futures trader specializing in the DTR (Draw The Range) strategy with a Fair Value Gap (FVG) entry model.
 
 The DTR strategy works as follows:
-- We establish a range (high and low) during a defined time window
-- A bias candle at the end of the range window tells us directional bias:
-  - Bullish bias = price closed above midpoint → prefer LONG entries
-  - Bearish bias = price closed below midpoint → prefer SHORT entries
-- An entry signal occurs when price breaks above range high (for longs) or below range low (for shorts) matching the bias
-- Stop loss is placed at the opposite range boundary
-- Take profit targets a range-width projection beyond the breakout
+1. SESSION RANGE — a high/low range is established during a defined time window (rangeHigh / rangeLow).
+2. SWEEP — price breaks out of the session boundary (above rangeHigh for SHORT, below rangeLow for LONG), trapping breakout traders.
+3. BIAS CANDLE (FVG) — after the sweep, a large impulse candle reverses sharply and creates a price gap (Fair Value Gap) between itself and the sweep bar. For a SHORT setup the bias candle's HIGH must be strictly below the sweep bar's LOW; for LONG the bias candle's LOW must be strictly above the sweep bar's HIGH.
+4. RETEST — price retraces back into the bias candle's body (FVG zone), creating the entry opportunity.
+5. BOS (Break of Structure) — price closes through the bias candle body in the bias direction, confirming the setup and triggering entry.
+6. STOP LOSS — placed at the bias candle's extreme (bcHigh for SHORT, bcLow for LONG), optionally extended by a small ATR buffer.
+7. TAKE PROFIT — targets the opposing range boundary (rangeLow for SHORT, rangeHigh for LONG).
 
 CURRENT STATE OF INSTRUMENTS:
 ${instrumentBlocks}

@@ -135,45 +135,47 @@ describe("buildRbsSession — range boundary isolation", () => {
 // TEST SUITE 2: Short signal — slMult=0 and slMult>0
 //
 // Break bars (SHORT BOS, 4-bar flow):
-//   t=10  sweep   o=99,h=102,l=98,c=101   close(101) > rangeHigh(100) → stage 1
-//   t=11  bias    o=103,h=104,l=90,c=87   body=16 → stage 2; bcHigh=104, bcBodyBot=87
-//   t=12  retest  o=90,h=90,l=85,c=88    high(90)≥bcBodyBot(87), close(88)≮87 → stage 3
-//   t=13  BOS     o=88,h=89,l=84,c=85    close(85)<bcBodyBot(87) → pending=true, slSource=104
+//   t=10  sweep   o=103,h=110,l=105,c=107  close(107) > rangeHigh(100) → stage 1
+//                                           l=105 > bias.h=104 → FVG gate will pass
+//   t=11  bias    o=103,h=104,l=90,c=87    body=16 → FVG ✓ (h=104 < prevBar.l=105)
+//                                           stage 2; bcHigh=104, bcBodyBot=87
+//   t=12  retest  o=90,h=90,l=85,c=88     high(90)≥bcBodyBot(87), close(88)≮87 → stage 3
+//   t=13  BOS     o=88,h=89,l=84,c=85     close(85)<bcBodyBot(87) → pending=true, slSource=104
 //
 // ATR computation (computeAtr14 over all 9 bars):
 //   Consecutive true ranges (bar[i] vs bar[i-1]):
-//     i=1: prev_c=95  bar h=100 l=90  TR = max(10, |100-95|=5, |90-95|=5)  = 10
-//     i=2: prev_c=95  bar h=100 l=90  TR = 10
-//     i=3: prev_c=95  bar h=100 l=90  TR = 10
-//     i=4: prev_c=95  bar h=100 l=90  TR = 10
-//     i=5: prev_c=95  bar h=102 l=98  TR = max(4, |102-95|=7, |98-95|=3)  =  7
-//     i=6: prev_c=101 bar h=104 l=90  TR = max(14, |104-101|=3, |90-101|=11) = 14
-//     i=7: prev_c=87  bar h=90  l=85  TR = max(5, |90-87|=3, |85-87|=2)   =  5
-//     i=8: prev_c=88  bar h=89  l=84  TR = max(5, |89-88|=1, |84-88|=4)   =  5
+//     i=1: prev_c=95  bar h=100 l=90   TR = max(10, |100-95|=5,  |90-95|=5)   = 10
+//     i=2: prev_c=95  bar h=100 l=90   TR = 10
+//     i=3: prev_c=95  bar h=100 l=90   TR = 10
+//     i=4: prev_c=95  bar h=100 l=90   TR = 10
+//     i=5: prev_c=95  bar h=110 l=105  TR = max(5, |110-95|=15, |105-95|=10)  = 15  [new sweep]
+//     i=6: prev_c=107 bar h=104 l=90   TR = max(14, |104-107|=3, |90-107|=17) = 17  [bias, new prev_c]
+//     i=7: prev_c=87  bar h=90  l=85   TR = max(5, |90-87|=3, |85-87|=2)      =  5
+//     i=8: prev_c=88  bar h=89  l=84   TR = max(5, |89-88|=1, |84-88|=4)      =  5
 //   8 TRs total (< 14, so all are used):
-//   ATR = (10+10+10+10+7+14+5+5) / 8 = 71 / 8 = 8.875
+//   ATR = (10+10+10+10+15+17+5+5) / 8 = 82 / 8 = 10.25
 //
-//   slMult=0 stopPrice  = round(104 + 0×8.875, 1)      = 104
-//   slMult=1 stopPrice  = round(104 + 1×8.875, 1)
-//                       = round(112.875, 1) = 113          [Math.round(112.875)=113]
+//   slMult=0 stopPrice  = round(104 + 0×10.25, 1)      = 104
+//   slMult=1 stopPrice  = round(104 + 1×10.25, 1)
+//                       = round(114.25, 1) = 114          [Math.round(114.25)=114]
 //   tp1Price (SHORT)    = round(rangeLow=90, 1)         = 90
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SHORT_BREAK_BARS = [
-  bar(99,  102, 98, 101, 10), // sweep
-  bar(103, 104, 90, 87,  11), // bias candle — bcHigh=104, bcBodyBot=87, body=16
-  bar(90,  90,  85, 88,  12), // retest (high≥87, close≮87) → stage 3
-  bar(88,  89,  84, 85,  13), // BOS (close<87) → pending
+  bar(103, 110, 105, 107, 10), // sweep (close=107>RH=100, l=105 > bias.h=104 → FVG ✓)
+  bar(103, 104, 90,  87,  11), // bias candle — h=104 < prevBar.l=105 ✓, bcHigh=104, bcBodyBot=87, body=16
+  bar(90,  90,  85,  88,  12), // retest (high≥87, close≮87) → stage 3
+  bar(88,  89,  84,  85,  13), // BOS (close<87) → pending
 ];
 
 const SHORT_ALL_BARS = [...RANGE_BARS, ...SHORT_BREAK_BARS];
 
 describe("buildRbsSession — Short signal construction", () => {
-  test("ATR is computed as 8.875 (hand-traced true ranges)", () => {
+  test("ATR is computed as 10.25 (hand-traced true ranges)", () => {
     const atr = computeAtr14(SHORT_ALL_BARS);
     assert.ok(
-      Math.abs(atr - 8.875) < 0.0001,
-      `expected ATR=8.875, got ${atr}`,
+      Math.abs(atr - 10.25) < 0.0001,
+      `expected ATR=10.25, got ${atr}`,
     );
   });
 
@@ -193,9 +195,9 @@ describe("buildRbsSession — Short signal construction", () => {
       FVG_MULT, /*slMult=*/1, CURRENT_PRICE, MIN_TICK,
     );
     assert.ok(result.shortSignal, "short signal should fire");
-    // round(104 + 8.875, 1) = round(112.875, 1) = 113
-    assert.equal(result.shortSignal.stopPrice, 113,
-      "slMult=1: stop = round(104 + 8.875, 1) = 113");
+    // round(104 + 10.25, 1) = round(114.25, 1) = 114
+    assert.equal(result.shortSignal.stopPrice, 114,
+      "slMult=1: stop = round(104 + 10.25, 1) = 114");
   });
 
   test("tp1Price is the opposing range boundary (rangeLow=90)", () => {
@@ -258,33 +260,34 @@ describe("buildRbsSession — Short signal construction", () => {
 // TEST SUITE 3: Long signal — slMult=0 and slMult>0
 //
 // Break bars (LONG BOS, 4-bar flow):
-//   t=10  sweep   o=91,h=93,l=88,c=89    close(89) < rangeLow(90) → stage 1
-//   t=11  bias    o=85,h=88,l=84,c=101   body=16 → stage 2; bcLow=84, bcBodyTop=101
+//   t=10  sweep   o=83,h=83,l=80,c=82    close(82) < rangeLow(90) → stage 1
+//                                         h=83 < bias.l=84 → FVG gate will pass
+//   t=11  bias    o=85,h=88,l=84,c=101   body=16 → FVG ✓ (l=84 > prevBar.h=83)
+//                                         stage 2; bcLow=84, bcBodyTop=101
 //   t=12  retest  o=99,h=99,l=94,c=95   low(94)≤bcBodyTop(101), close(95)≯101 → stage 3
 //   t=13  BOS     o=95,h=103,l=93,c=103  close(103)>bcBodyTop(101) → pending=true, slSource=84
 //
 // ATR computation (computeAtr14 over all 9 bars):
-//   i=1: prev_c=95  bar h=100 l=90  TR = max(10, |100-95|=5, |90-95|=5)  = 10
+//   i=1: prev_c=95  bar h=100 l=90  TR = max(10, |100-95|=5,  |90-95|=5)    = 10
 //   i=2: prev_c=95  bar h=100 l=90  TR = 10
 //   i=3: prev_c=95  bar h=100 l=90  TR = 10
 //   i=4: prev_c=95  bar h=100 l=90  TR = 10
-//   i=5: prev_c=95  bar h=93  l=88  TR = max(5, |93-95|=2, |88-95|=7)    =  7
-//   i=6: prev_c=89  bar h=88  l=84  TR = max(h-l=4, |88-89|=1, |84-89|=5)=  5
-//         Note: h-l=88-84=4 (bias body=16 is close-open, not the wick span)
-//   i=7: prev_c=101 bar h=99  l=94  TR = max(5, |99-101|=2, |94-101|=7)  =  7
-//   i=8: prev_c=95  bar h=103 l=93  TR = max(10, |103-95|=8, |93-95|=2)  = 10
+//   i=5: prev_c=95  bar h=83  l=80  TR = max(3, |83-95|=12, |80-95|=15)     = 15  [new sweep]
+//   i=6: prev_c=82  bar h=88  l=84  TR = max(4, |88-82|=6,  |84-82|=2)      =  6  [bias, new prev_c]
+//   i=7: prev_c=101 bar h=99  l=94  TR = max(5, |99-101|=2, |94-101|=7)     =  7
+//   i=8: prev_c=95  bar h=103 l=93  TR = max(10, |103-95|=8, |93-95|=2)     = 10
 //   8 TRs total (< 14, so all are used):
-//   ATR = (10+10+10+10+7+5+7+10) / 8 = 69/8 = 8.625
+//   ATR = (10+10+10+10+15+6+7+10) / 8 = 78/8 = 9.75
 //
-//   slMult=0 stopPrice  = round(84 - 0×8.625, 1)      = 84
-//   slMult=1 stopPrice  = round(84 - 1×8.625, 1)
-//                       = round(75.375, 1) = 75          [Math.round(75.375)=75]
+//   slMult=0 stopPrice  = round(84 - 0×9.75, 1)      = 84
+//   slMult=1 stopPrice  = round(84 - 1×9.75, 1)
+//                       = round(74.25, 1) = 74          [Math.round(74.25)=74]
 //   tp1Price (LONG)     = round(rangeHigh=100, 1)      = 100
 // ─────────────────────────────────────────────────────────────────────────────
 
 const LONG_BREAK_BARS = [
-  bar(91, 93,  88, 89,  10), // sweep
-  bar(85, 88,  84, 101, 11), // bias candle — bcLow=84, bcBodyTop=101, body=16
+  bar(83, 83,  80, 82,  10), // sweep (close=82<RL=90, h=83 < bias.l=84 → FVG ✓)
+  bar(85, 88,  84, 101, 11), // bias candle — l=84 > prevBar.h=83 ✓, bcLow=84, bcBodyTop=101, body=16
   bar(99, 99,  94, 95,  12), // retest (low≤101, close≯101) → stage 3
   bar(95, 103, 93, 103, 13), // BOS (close>101) → pending
 ];
@@ -292,11 +295,11 @@ const LONG_BREAK_BARS = [
 const LONG_ALL_BARS = [...RANGE_BARS, ...LONG_BREAK_BARS];
 
 describe("buildRbsSession — Long signal construction", () => {
-  test("ATR is computed as 8.625 (hand-traced true ranges)", () => {
+  test("ATR is computed as 9.75 (hand-traced true ranges)", () => {
     const atr = computeAtr14(LONG_ALL_BARS);
     assert.ok(
-      Math.abs(atr - 8.625) < 0.0001,
-      `expected ATR=8.625, got ${atr}`,
+      Math.abs(atr - 9.75) < 0.0001,
+      `expected ATR=9.75, got ${atr}`,
     );
   });
 
@@ -316,9 +319,9 @@ describe("buildRbsSession — Long signal construction", () => {
       FVG_MULT, /*slMult=*/1, CURRENT_PRICE, MIN_TICK,
     );
     assert.ok(result.longSignal, "long signal should fire");
-    // round(84 - 8.625, 1) = round(75.375, 1) = 75
-    assert.equal(result.longSignal.stopPrice, 75,
-      "slMult=1: stop = round(84 - 8.625, 1) = 75");
+    // round(84 - 9.75, 1) = round(74.25, 1) = 74
+    assert.equal(result.longSignal.stopPrice, 74,
+      "slMult=1: stop = round(84 - 9.75, 1) = 74");
   });
 
   test("tp1Price is the opposing range boundary (rangeHigh=100)", () => {
