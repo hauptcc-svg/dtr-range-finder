@@ -930,11 +930,13 @@
                         <th class="td-right">Stop</th>
                         <th class="td-right">TP1</th>
                         <th class="td-right">TP2</th>
+                        <th>RBS LON</th>
+                        <th>RBS NY</th>
                         <th>Action</th>
                     </tr>
                 </thead>
                 <tbody id="positions-tbody">
-                    <tr><td colspan="10" class="empty-state">Loading positions…</td></tr>
+                    <tr><td colspan="12" class="empty-state">Loading positions…</td></tr>
                 </tbody>
             </table>
         </div>
@@ -1418,23 +1420,53 @@ let positionsPollTimer = null;
 
 async function loadPositions() {
     try {
-        const data = await apiFetch('/api/positions');
-        const positions = Array.isArray(data) ? data : (data.positions || []);
-        renderPositions(positions);
+        const [posData, instrData] = await Promise.all([
+            apiFetch('/api/positions'),
+            apiFetch('/api/instruments').catch(() => [])
+        ]);
+        const positions = Array.isArray(posData) ? posData : (posData.positions || []);
+        const instruments = Array.isArray(instrData) ? instrData : [];
+        const instrBySymbol = {};
+        instruments.forEach(i => { instrBySymbol[i.symbol || i.instrument] = i; });
+        renderPositions(positions, instrBySymbol);
     } catch(e) {
-        document.getElementById('positions-tbody').innerHTML = '<tr><td colspan="10" class="empty-state">Error loading positions: ' + e.message + '</td></tr>';
+        document.getElementById('positions-tbody').innerHTML = '<tr><td colspan="12" class="empty-state">Error loading positions: ' + e.message + '</td></tr>';
     }
 }
 
-function renderPositions(positions) {
+const RBS_POS_STAGE_LABELS = ['Waiting for sweep', 'Swept', 'Bias candle fired', 'Retest pending'];
+
+function rbsPosBadge(snap, direction) {
+    if (!snap) return '<span class="rbs-dir rbs-stage-idle">—</span>';
+    const isLong = direction === 'long';
+    const stage = isLong ? (snap.longStage || 0) : (snap.shortStage || 0);
+    const pending = isLong ? snap.longPending : snap.shortPending;
+    const fired = isLong ? snap.longSignalFired : snap.shortSignalFired;
+    const label = RBS_POS_STAGE_LABELS[stage] || String(stage);
+    let cls;
+    if (fired || pending) {
+        cls = 'rbs-stage-active';
+    } else if (stage === 0) {
+        cls = 'rbs-stage-idle';
+    } else {
+        cls = 'rbs-stage-progress';
+    }
+    return `<span class="rbs-dir ${cls}">${label}</span>`;
+}
+
+function renderPositions(positions, instrBySymbol) {
+    instrBySymbol = instrBySymbol || {};
     const tbody = document.getElementById('positions-tbody');
     if (!positions || positions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No open positions</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="empty-state">No open positions</td></tr>';
         return;
     }
     tbody.innerHTML = positions.map(p => {
         const dirClass = p.direction === 'long' ? 'dir-long' : 'dir-short';
         const pnlClass = (p.unrealizedPnl || 0) >= 0 ? 'positive' : 'negative';
+        const instr = instrBySymbol[p.instrument] || {};
+        const lonBadge = rbsPosBadge(instr.rbsLondon, p.direction);
+        const nyBadge = rbsPosBadge(instr.rbsNy, p.direction);
         return `<tr>
             <td class="td-mono">${p.instrument}</td>
             <td class="${dirClass}">${(p.direction||'').toUpperCase()}</td>
@@ -1445,6 +1477,8 @@ function renderPositions(positions) {
             <td class="td-right td-mono">${p.stopPrice != null ? fmtP(p.stopPrice) : '—'}</td>
             <td class="td-right td-mono">${p.tp1Price != null ? fmtP(p.tp1Price) : '—'}</td>
             <td class="td-right td-mono">${p.tp2Price != null ? fmtP(p.tp2Price) : '—'}</td>
+            <td>${lonBadge}</td>
+            <td>${nyBadge}</td>
             <td>
                 <button class="btn-close-pos" data-symbol="${escHtml(p.instrument)}">CLOSE</button>
             </td>
