@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { InstrumentStatus, RbsStageSnapshot } from "@workspace/api-client-react";
 import { formatCurrency, formatPrice } from "@/lib/format";
@@ -86,6 +86,18 @@ function StageTracker({
   signalFired: boolean;
 }) {
   const activeStep = getActiveStep(stage, pending, signalFired);
+  const prevActiveStep = useRef<number>(activeStep);
+  const [pulsing, setPulsing] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (activeStep > prevActiveStep.current) {
+      setPulsing(activeStep);
+      const timer = setTimeout(() => setPulsing(null), 650);
+      prevActiveStep.current = activeStep;
+      return () => clearTimeout(timer);
+    }
+    prevActiveStep.current = activeStep;
+  }, [activeStep]);
 
   return (
     <div className="flex items-center gap-0 w-full">
@@ -95,6 +107,7 @@ function StageTracker({
         const isCompleted = activeStep > stepNumber;
         const isReached = isActive || isCompleted;
         const isLast = i === STEP_CONFIG.length - 1;
+        const isPulsing = pulsing === stepNumber;
 
         return (
           <div key={step.label} className="flex items-center" style={{ flex: isLast ? "0 0 auto" : "1 1 0%" }}>
@@ -105,7 +118,8 @@ function StageTracker({
                   style={{ width: 14, height: 14 }}
                 >
                   <div
-                    className="rounded-full transition-all duration-300"
+                    key={isPulsing ? `${step.label}-pulse` : step.label}
+                    className={cn("rounded-full transition-all duration-300", isPulsing && "stage-dot-pulse")}
                     style={{
                       width: isActive ? 12 : 8,
                       height: isActive ? 12 : 8,
