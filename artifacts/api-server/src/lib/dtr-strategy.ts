@@ -269,7 +269,7 @@ export function stepLongMachine(
 /**
  * Build the full RBS session result from a list of bars and time boundaries.
  *
- * @param bars          1-min bars from range start through current time
+ * @param bars          OHLCV bars from range start through current time (timeframe-agnostic; agent feeds 5-min bars)
  * @param rangeEndMs    UTC ms of range window end (02:13 or 09:13 NY today)
  * @param breakStartMs  UTC ms of break window start (= rangeEnd)
  * @param breakEndMs    UTC ms of break window end (sess2EntryEnd or sessionEnd)

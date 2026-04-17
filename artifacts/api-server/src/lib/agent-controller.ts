@@ -605,6 +605,10 @@ class AgentController {
             } else if (scalp1mBars.length > 0) {
               state.lastPrice = scalp1mBars[scalp1mBars.length - 1].c;
             }
+            logger.debug(
+              { symbol: state.symbol, bars5m: recentBars.length, bars1m: scalp1mBars.length },
+              "Dual-timeframe bars fetched for autonomous tick"
+            );
           } catch (err) {
             logger.warn({ err, symbol: state.symbol }, "Failed to fetch bars for autonomous tick");
           }
@@ -802,6 +806,10 @@ class AgentController {
               } else if (scalp1mBars.length > 0) {
                 state.lastPrice = scalp1mBars[scalp1mBars.length - 1].c;
               }
+              logger.debug(
+                { symbol: state.symbol, bars5m: recentBars.length, bars1m: scalp1mBars.length },
+                "Dual-timeframe bars fetched for autonomous manual trigger"
+              );
             } catch {
               // non-fatal
             }
