@@ -4,6 +4,7 @@ import { InstrumentStatus, RbsStageSnapshot } from "@workspace/api-client-react"
 import { formatCurrency, formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { getGetInstrumentsQueryKey } from "@workspace/api-client-react";
 
 interface InstrumentCardProps {
@@ -64,10 +65,10 @@ function stageInfo(stage: number, pending: boolean, signalFired: boolean): { lab
 }
 
 const STEP_CONFIG = [
-  { label: "Swpt", activeColor: "#60a5fa" },
-  { label: "Bias", activeColor: "#fb923c" },
-  { label: "Rtst", activeColor: "#c084fc" },
-  { label: "Sig",  activeColor: "#facc15" },
+  { label: "Swpt", tooltip: "Swept",              activeColor: "#60a5fa" },
+  { label: "Bias", tooltip: "Bias candle fired",  activeColor: "#fb923c" },
+  { label: "Rtst", tooltip: "Retest pending",     activeColor: "#c084fc" },
+  { label: "Sig",  tooltip: "Signal active",      activeColor: "#facc15" },
 ] as const;
 
 function getActiveStep(stage: number, pending: boolean, signalFired: boolean): number {
@@ -97,22 +98,28 @@ function StageTracker({
 
         return (
           <div key={step.label} className="flex items-center" style={{ flex: isLast ? "0 0 auto" : "1 1 0%" }}>
-            <div
-              title={step.label}
-              className="relative flex items-center justify-center flex-shrink-0"
-              style={{ width: 14, height: 14 }}
-            >
-              <div
-                className="rounded-full transition-all duration-300"
-                style={{
-                  width: isActive ? 12 : 8,
-                  height: isActive ? 12 : 8,
-                  backgroundColor: isReached ? step.activeColor : "#374151",
-                  opacity: isCompleted ? 0.55 : 1,
-                  boxShadow: isActive ? `0 0 6px 2px ${step.activeColor}66` : "none",
-                }}
-              />
-            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  className="relative flex items-center justify-center flex-shrink-0 cursor-default"
+                  style={{ width: 14, height: 14 }}
+                >
+                  <div
+                    className="rounded-full transition-all duration-300"
+                    style={{
+                      width: isActive ? 12 : 8,
+                      height: isActive ? 12 : 8,
+                      backgroundColor: isReached ? step.activeColor : "#374151",
+                      opacity: isCompleted ? 0.55 : 1,
+                      boxShadow: isActive ? `0 0 6px 2px ${step.activeColor}66` : "none",
+                    }}
+                  />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {step.tooltip}
+              </TooltipContent>
+            </Tooltip>
             {!isLast && (
               <div
                 className="h-px flex-1 transition-all duration-300"
