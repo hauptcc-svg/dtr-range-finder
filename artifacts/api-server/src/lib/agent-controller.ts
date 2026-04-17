@@ -577,6 +577,29 @@ class AgentController {
   }
 
   /**
+   * Mark ALL open DB trade rows for a Claude position as closed.
+   * Covers original entry + any stack legs (which may have been inserted as separate rows).
+   * Called on reverse, time-stop, and any path that closes a Claude position without going
+   * through the normal syncPositionStates iteration.
+   */
+  private async closeAllOpenClaudeTrades(symbol: string, exitTime: Date): Promise<void> {
+    try {
+      await db
+        .update(tradesTable)
+        .set({ status: "closed", exitTime, pnl: 0 })
+        .where(
+          and(
+            eq(tradesTable.instrument, symbol),
+            eq(tradesTable.strategy, "claude"),
+            eq(tradesTable.status, "open"),
+          )
+        );
+    } catch (err) {
+      logger.error({ err, symbol }, "closeAllOpenClaudeTrades: failed");
+    }
+  }
+
+  /**
    * Compute stop and TP for a Claude autonomous bracket order.
    * SL = from ATR signal (if present), else 1× ATR from bars, else 0.5% of price.
    * TP = sized to deliver ~$35 profit, clamped to [$20, $50], snapped to minTick.
@@ -603,8 +626,8 @@ class AgentController {
     const midTp = 35 / (config.pointValue * config.qty);
     const maxTp = 50 / (config.pointValue * config.qty);
     const rawTp = Math.min(maxTp, Math.max(minTp, midTp));
-    // Snap up to next minTick boundary
-    const snappedTp = Math.ceil(rawTp / config.minTick) * config.minTick;
+    // Snap to nearest minTick boundary
+    const snappedTp = Math.round(rawTp / config.minTick) * config.minTick;
     const tp1Price = isBuy ? price + snappedTp : price - snappedTp;
 
     return { stopPrice, tp1Price };
@@ -731,6 +754,8 @@ class AgentController {
           const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
           const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal ?? null, instrData?.recentBars ?? []);
           const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
+          // Close all prior open Claude trade rows (original + any stack legs) before recording reversal
+          await this.closeAllOpenClaudeTrades(decision.symbol, new Date());
           const isScalp = decision.timeframe === "1m_scalp";
           const [trade] = await db.insert(tradesTable).values({
             instrument: decision.symbol, direction: reverseDir, entryPrice: price, exitPrice: null,
@@ -1019,6 +1044,8 @@ class AgentController {
             const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
             const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
             const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
+            // Close all prior open Claude trade rows (original + any stack legs) before recording reversal
+            await this.closeAllOpenClaudeTrades(decision.symbol, new Date());
             const [trade] = await db.insert(tradesTable).values({
               instrument: decision.symbol, direction: reverseDir, entryPrice: price, exitPrice: null,
               qty: config.qty, pnl: null, stopPrice, tp1Price, tp2Price: null,
@@ -1963,7 +1990,6 @@ class AgentController {
       const closedDirection = state.positionDirection;
       const closedEntry = state.positionEntryPrice;
       const closedStack = state.positionStackCount;
-      const closedTradeId = state.openTradeId;
       try {
         await this.client.closePositionForContract(state.contractId);
         // Immediately reset in-memory state so this position is not targeted again
@@ -1977,14 +2003,8 @@ class AgentController {
         state.positionTp1Price = null;
         state.positionOpenedAt = null;
         state.openTradeId = null;
-        // Mark DB trade closed (best-effort; no exit price available at market)
-        if (closedTradeId) {
-          await db
-            .update(tradesTable)
-            .set({ status: "closed", exitTime: new Date(), pnl: 0 })
-            .where(eq(tradesTable.id, closedTradeId))
-            .catch(() => {});
-        }
+        // Mark ALL open Claude trade rows closed (covers original entry + any stack legs)
+        await this.closeAllOpenClaudeTrades(symbol, new Date());
         this.sendTelegram(
           `⏱ <b>TIME STOP</b> · DeclanCapital FX\n\n` +
           `<b>${symbol}</b> held > 30 min — auto-closed\n` +
