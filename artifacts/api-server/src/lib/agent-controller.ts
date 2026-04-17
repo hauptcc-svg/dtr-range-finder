@@ -586,7 +586,9 @@ class AgentController {
     try {
       await db
         .update(tradesTable)
-        .set({ status: "closed", exitTime, pnl: 0 })
+        // pnl intentionally left null — actual realized PnL is captured by the broker
+        // reconciliation loop (syncPositionStates) when it runs after market close.
+        .set({ status: "closed", exitTime, pnl: null })
         .where(
           and(
             eq(tradesTable.instrument, symbol),
@@ -655,11 +657,13 @@ class AgentController {
 
     if (eligibleInstruments.length === 0) return;
 
-    // Fetch 5-min bars (last 5 hours, up to 60 bars) for primary strategy analysis
-    // and 1-min bars (last 30 min, ~30 bars) for scalp context
+    // Fetch 5-min bars (last 25 hours, ~300 bars) for primary strategy analysis.
+    // ATR pullback signal requires EMA(200) + ATR(14) + 5 = 219 bars minimum;
+    // 25 hours × 12 bars/hr = ~300 bars gives sufficient warmup.
+    // Fetch 1-min bars (last 4 hours, ~240 bars) for scalp context (also needs 219+).
     const windowEnd = new Date();
-    const window5mStart = new Date(windowEnd.getTime() - 5 * 60 * 60 * 1000);  // 5 hours for 5m bars
-    const window1mStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);       // 30 min for 1m bars
+    const window5mStart = new Date(windowEnd.getTime() - 25 * 60 * 60 * 1000);  // 25 hours for 5m bars
+    const window1mStart = new Date(windowEnd.getTime() - 4 * 60 * 60 * 1000);   // 4 hours for 1m bars
 
     const instrumentsWithBars = await Promise.all(
       eligibleInstruments.map(async ({ state, config }) => {
@@ -949,11 +953,12 @@ class AgentController {
         logger.warn({ err }, "Position refresh before autonomous Claude analysis failed (non-fatal)");
       }
 
-      // Fetch 5-min bars (last 5 hours) for primary strategy analysis
-      // and 1-min bars (last 30 min) for scalp context
+      // Fetch 5-min bars (last 25 hours, ~300 bars) for primary strategy analysis.
+      // ATR pullback signal requires EMA(200)+ATR(14)+5 = 219 bars minimum.
+      // Fetch 1-min bars (last 4 hours, ~240 bars) for scalp context.
       const windowEnd = new Date();
-      const window5mStart = new Date(windowEnd.getTime() - 5 * 60 * 60 * 1000);
-      const window1mStart = new Date(windowEnd.getTime() - 30 * 60 * 1000);
+      const window5mStart = new Date(windowEnd.getTime() - 25 * 60 * 60 * 1000);
+      const window1mStart = new Date(windowEnd.getTime() - 4 * 60 * 60 * 1000);
 
       const withBars = await Promise.all(
         eligibleInstruments.map(async ({ state, config }) => {
