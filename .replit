@@ -9,6 +9,27 @@ args = ["pnpm", "store", "prune"]
 env = { "CI" = "true" }
 
 [workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "rbs-state-machine-tests"
+
+[[workflows.workflow]]
+name = "rbs-state-machine-tests"
+author = "agent"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/api-server && node --test --import tsx/esm src/__tests__/dtr-strategy.test.ts"
 
 [agent]
 stack = "PNPM_WORKSPACE"

@@ -118,7 +118,7 @@ export function createInstrumentState(symbol: string): InstrumentState {
   };
 }
 
-function makeMachine(): RbsStateMachine {
+export function makeMachine(): RbsStateMachine {
   return { stage: 0, bcHigh: null, bcLow: null, bcBodyTop: null, bcBodyBot: null, pending: false, slSource: null };
 }
 
@@ -143,7 +143,7 @@ export function computeAtr14(bars: Bar[]): number | null {
  * `pending` is reset to false at the start of each bar; it is only true if
  * BOS fires on THIS specific bar (consumed → place entry on next bar open).
  */
-function stepShortMachine(
+export function stepShortMachine(
   machine: RbsStateMachine,
   bar: Bar,
   rangeHigh: number,
@@ -201,7 +201,7 @@ function stepShortMachine(
 /**
  * Step the LONG state machine forward by one bar.
  */
-function stepLongMachine(
+export function stepLongMachine(
   machine: RbsStateMachine,
   bar: Bar,
   rangeLow: number,
