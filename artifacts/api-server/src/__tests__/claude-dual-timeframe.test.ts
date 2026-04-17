@@ -183,12 +183,13 @@ describe("Scalp detection logic", () => {
 
   it("detects scalp via reasoning keyword fallback", () => {
     const decision = { symbol: "MYMM6", action: "long" as const, reasoning: "tight scalp off 1m range break" };
-    const isScalp = decision.timeframe === "1m_scalp" || /scalp/i.test(decision.reasoning ?? "");
+    const isScalp = (decision as { timeframe?: string }).timeframe === "1m_scalp" || /scalp/i.test(decision.reasoning ?? "");
     assert.equal(isScalp, true);
   });
 
   it("does not tag 5m trades as scalp", () => {
-    const decision = { symbol: "MYMM6", action: "long" as const, reasoning: "5m BOS above range high", timeframe: "5m" as const };
+    // Use `as string` so TS allows comparison against "1m_scalp" without literal-type narrowing
+    const decision = { symbol: "MYMM6", action: "long" as const, reasoning: "5m BOS above range high", timeframe: "5m" as string };
     const isScalp = decision.timeframe === "1m_scalp" || /scalp/i.test(decision.reasoning ?? "");
     assert.equal(isScalp, false);
   });

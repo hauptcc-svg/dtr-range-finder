@@ -1093,7 +1093,10 @@ class AgentController {
         // ── STACK ────────────────────────────────────────────────────────────
         if (decision.action === "stack") {
           if (!state.inPosition || !state.isClaudePosition) continue;
-          if (state.positionStackCount >= this.MAX_STACK - 1) continue;
+          if (state.positionStackCount >= this.MAX_STACK - 1) {
+            logger.info({ symbol: decision.symbol, stackCount: state.positionStackCount }, "Claude manual trigger: max stack reached, skipping stack");
+            continue;
+          }
           if (state.todayTrades >= this.effectiveMaxTrades(decision.symbol)) continue;
           const isBuy = state.positionDirection === "long";
           const price = state.lastPrice;
