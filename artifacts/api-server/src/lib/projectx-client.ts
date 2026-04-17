@@ -249,10 +249,17 @@ export class ProjectXClient {
     let lastError: Error | null = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
+        // Generate a fresh unique customTag on every attempt so ProjectX never
+        // rejects a retry with "Custom tag already in use" (the broker may
+        // associate the tag even when the first attempt appears to fail).
+        const body =
+          attempt > 1 && typeof orderBody.customTag === "string"
+            ? { ...orderBody, customTag: `${orderBody.customTag}_r${attempt}_${Date.now()}` }
+            : orderBody;
         const resp = await this.request<{ orderId?: number; success: boolean; errorCode?: number; errorMessage?: string }>(
           "POST",
           "/api/Order/place",
-          orderBody
+          body
         );
         if (resp.success !== true) {
           throw new Error(

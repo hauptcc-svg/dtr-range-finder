@@ -17,6 +17,7 @@ import {
   buildRbsSession,
   createInstrumentState,
   calculatePnl,
+  roundToTick,
   type InstrumentState,
   type EntrySignal,
   type RbsSessionResult,
@@ -1615,8 +1616,16 @@ class AgentController {
       const isBuy = pos.size > 0;
       const qty = Math.abs(pos.size);
 
+      // Round prices to the instrument's minimum tick size before order placement.
+      // Without this, MNQM6 (tick=0.25) and other instruments reject with
+      // "Invalid stop price. Price is not aligned to tick size".
+      const config = this.getEffectiveConfig(symbol);
+      const minTick = config?.minTick ?? 0.01;
+      stopPrice = roundToTick(stopPrice, minTick);
+      tp1Price  = roundToTick(tp1Price, minTick);
+
       logger.warn(
-        { symbol, contractId: pos.contractId, hasSL, hasTP, stopPrice, tp1Price },
+        { symbol, contractId: pos.contractId, hasSL, hasTP, stopPrice, tp1Price, minTick },
         "healMissingBrackets: OPEN POSITION MISSING BRACKET — placing missing orders"
       );
 
