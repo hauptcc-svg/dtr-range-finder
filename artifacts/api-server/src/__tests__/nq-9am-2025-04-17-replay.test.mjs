@@ -1,12 +1,12 @@
 /**
  * Real-session replay test — NQ 9AM NY session, 2025-04-17
  *
- * Verifies that buildRbsSession produces the same signal that the DTR Time Range
- * Scalper v3 PineScript strategy generated on TradingView for this session.
+ * Verifies that buildRbsSession correctly rejects this session under the
+ * strict FVG gate introduced in the DTR strategy refactor.
  *
  * Fixture:  src/__tests__/fixtures/nq-9am-2025-04-17-real.json
  *
- * TradingView reference output (verified, no mismatches):
+ * Historical TradingView reference output (old PineScript, no FVG gate):
  *   Signal:    LONG
  *   stopPrice: 19142   (= bias candle LOW, slMult=0)
  *   tp1Price:  19225   (= rangeHigh, opposing boundary)
@@ -17,8 +17,11 @@
  * Break bar trace (all 4 bars in 09:13–12:00 EDT window):
  *   13:13 UTC  sweep       close(19162) < rangeLow(19163) → stage 0→1
  *   13:14 UTC  bias candle body=50 ≥ 1.5×22.79=34.18 → stage 1→2; bcLow=19142
- *   13:15 UTC  retest      low(19185) ≤ bcBodyTop(19198), close not > 19198 → stage 2→3
- *   13:16 UTC  BOS         close(19204) > bcBodyTop(19198) → pending=true, slSource=19142
+ *              FVG gate check: bias.l(19142) > sweep.h(19207)? NO → FVG FAILS → no signal
+ *
+ * Under the strict FVG gate (bias.l must be strictly > prevBar.h for LONG):
+ *   bias.l=19142 is NOT > sweep.h=19207 → the FVG gap does not exist.
+ *   The machine stays at stage 1 (awaiting a valid bias candle) and longSignal = null.
  *
  * Run: pnpm --filter @workspace/api-server test
  */
@@ -29,7 +32,7 @@ import path from "node:path";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildRbsSession, computeAtr14 } from "../lib/dtr-strategy.js";
+import { buildRbsSession } from "../lib/dtr-strategy.js";
 
 // ─── Load fixture ─────────────────────────────────────────────────────────────
 
@@ -48,18 +51,12 @@ const {
   minTick,
 } = session;
 
-// Entry price is supplied as the current market price at signal evaluation time.
-// The fixture does not capture the next-bar open, so we use the BOS bar close as
-// a representative value.  entryPrice is not asserted in these tests because
-// TradingView's strategy processes orders at bar-close (process_orders_on_close),
-// which may differ from a live system's next-bar open.
 const CURRENT_PRICE = 19204;
 
 // ─── Suite ────────────────────────────────────────────────────────────────────
 
 describe("NQ 9AM NY 2025-04-17 real-session replay — buildRbsSession vs TradingView", () => {
 
-  // Pre-compute result once; each test uses the same instance.
   const result = buildRbsSession(
     bars,
     rangeEndMs,
@@ -99,12 +96,18 @@ describe("NQ 9AM NY 2025-04-17 real-session replay — buildRbsSession vs Tradin
     );
   });
 
-  // ── Signal fired ─────────────────────────────────────────────────────────────
+  // ── FVG gate blocks the signal ───────────────────────────────────────────────
+  //
+  // The 9AM session sweep bar: h=19207, l=19158
+  // The bias bar:              h=19208, l=19142
+  // FVG LONG condition: bias.l(19142) > sweep.h(19207) → FALSE
+  // → machine stays at stage 1; no signal fires.
 
-  test("a LONG signal fired (BOS bar at 09:16 EDT)", () => {
-    assert.ok(
-      result.longSignal !== null,
-      "expected a LONG signal but longSignal is null",
+  test("no LONG signal fired — strict FVG gate blocks (bias.l=19142 ≤ sweep.h=19207)", () => {
+    assert.equal(
+      result.longSignal,
+      null,
+      "expected null longSignal: bias.l=19142 is not > sweep.h=19207, FVG gap absent",
     );
   });
 
@@ -112,50 +115,15 @@ describe("NQ 9AM NY 2025-04-17 real-session replay — buildRbsSession vs Tradin
     assert.equal(
       result.shortSignal,
       null,
-      "unexpected SHORT signal — only long BOS should fire",
+      "no SHORT signal expected in this LONG-biased session",
     );
-  });
-
-  // ── Signal values ─────────────────────────────────────────────────────────────
-
-  test("signal direction is 'long'", () => {
-    assert.ok(result.longSignal);
-    assert.equal(result.longSignal.direction, expectedSignal.direction);
-  });
-
-  test("stopPrice matches reference (19142 = biasCandle LOW, slMult=0)", () => {
-    assert.ok(result.longSignal);
-    assert.equal(
-      result.longSignal.stopPrice,
-      expectedSignal.stopPrice,
-      `stopPrice mismatch: expected=${expectedSignal.stopPrice}, engine=${result.longSignal.stopPrice}`,
-    );
-  });
-
-  test("tp1Price matches reference (19225 = rangeHigh, opposing boundary)", () => {
-    assert.ok(result.longSignal);
-    assert.equal(
-      result.longSignal.tp1Price,
-      expectedSignal.tp1Price,
-      `tp1Price mismatch: expected=${expectedSignal.tp1Price}, engine=${result.longSignal.tp1Price}`,
-    );
-  });
-
-  test("signal carries correct rangeHigh and rangeLow", () => {
-    assert.ok(result.longSignal);
-    assert.equal(result.longSignal.rangeHigh, expectedSignal.rangeHigh);
-    assert.equal(result.longSignal.rangeLow,  expectedSignal.rangeLow);
   });
 
   // ── State machine final state ────────────────────────────────────────────────
 
-  test("longMachine is reset to stage 0 after BOS (pending consumed)", () => {
-    // After stepLongMachine processes the BOS bar, the machine resets to stage 0
-    // and pending=true is set.  buildRbsSession snapshots the machine post-loop,
-    // so pending is the value from the BOS bar step.
-    assert.equal(result.longMachine.stage, 0);
-    assert.equal(result.longMachine.pending, true);
-    assert.equal(result.longMachine.slSource, 19142);
+  test("longMachine remains at stage 1 after FVG gate rejection (awaiting valid bias)", () => {
+    assert.equal(result.longMachine.stage, 1);
+    assert.equal(result.longMachine.pending, false);
   });
 
   test("shortMachine remains at stage 0 (no sweep above rangeHigh in this session)", () => {
