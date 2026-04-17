@@ -1,7 +1,8 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useEffect } from "react";
 import NotFound from "@/pages/not-found";
 import { Layout } from "@/components/layout";
 
@@ -19,9 +20,20 @@ const queryClient = new QueryClient({
   },
 });
 
+function BaseRedirect() {
+  const [location, setLocation] = useLocation();
+  useEffect(() => {
+    if (location === "" || location === undefined) {
+      setLocation("/");
+    }
+  }, [location, setLocation]);
+  return null;
+}
+
 function Router() {
   return (
     <Layout>
+      <BaseRedirect />
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/trades" component={Trades} />
@@ -30,14 +42,6 @@ function Router() {
       </Switch>
     </Layout>
   );
-}
-
-// Redirect root visits to the Flask autonomous trading app
-if (
-  typeof window !== "undefined" &&
-  (window.location.pathname === "/" || window.location.pathname === "")
-) {
-  window.location.replace("/dtr-python");
 }
 
 function App() {

@@ -2,6 +2,9 @@
 
 # compiled output
 dist
+!artifacts/dtr-dashboard/dist/
+!artifacts/dtr-dashboard/dist/public/
+!artifacts/dtr-dashboard/dist/public/**
 tmp
 out-tsc
 *.tsbuildinfo
