@@ -19,7 +19,7 @@ if (!isBuild && !rawPort) {
   );
 }
 
-const basePath = process.env.BASE_PATH ?? "/dtr-dashboard";
+const basePath = process.env.BASE_PATH || "/dtr-dashboard";
 
 export default defineConfig({
   base: basePath,
