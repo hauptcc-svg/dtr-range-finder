@@ -31,6 +31,7 @@ export const GetAgentStatusResponse = zod.object({
     "daily_limit_hit",
   ]),
   dailyPnl: zod.number(),
+  unrealizedPnl: zod.number(),
   dailyLossLimit: zod.number(),
   dailyProfitTarget: zod.number(),
   tradeCount: zod.number(),
@@ -39,7 +40,6 @@ export const GetAgentStatusResponse = zod.object({
   errorMessage: zod.string().nullable(),
   claudeAutonomousMode: zod.boolean(),
   lastClaudeAutonomousTick: zod.string().nullable(),
-  unrealizedPnl: zod.number(),
 });
 
 /**
@@ -61,6 +61,40 @@ export const GetInstrumentsResponseItem = zod.object({
   rangeHigh: zod.number().nullable(),
   rangeLow: zod.number().nullable(),
   lastPrice: zod.number().nullable(),
+  rbsLondon: zod
+    .union([
+      zod.object({
+        shortStage: zod
+          .number()
+          .describe("0=idle, 1=swept, 2=bias_candle, 3=retested\/pending"),
+        longStage: zod
+          .number()
+          .describe("0=idle, 1=swept, 2=bias_candle, 3=retested\/pending"),
+        shortPending: zod.boolean(),
+        longPending: zod.boolean(),
+        shortSignalFired: zod.boolean(),
+        longSignalFired: zod.boolean(),
+      }),
+      zod.null(),
+    ])
+    .describe("RBS state machine snapshot for the 2AM London session"),
+  rbsNy: zod
+    .union([
+      zod.object({
+        shortStage: zod
+          .number()
+          .describe("0=idle, 1=swept, 2=bias_candle, 3=retested\/pending"),
+        longStage: zod
+          .number()
+          .describe("0=idle, 1=swept, 2=bias_candle, 3=retested\/pending"),
+        shortPending: zod.boolean(),
+        longPending: zod.boolean(),
+        shortSignalFired: zod.boolean(),
+        longSignalFired: zod.boolean(),
+      }),
+      zod.null(),
+    ])
+    .describe("RBS state machine snapshot for the 9AM NY session"),
 });
 export const GetInstrumentsResponse = zod.array(GetInstrumentsResponseItem);
 
@@ -111,7 +145,6 @@ export const GetTradesResponse = zod.object({
       tp1Price: zod.number().nullable(),
       tp2Price: zod.number().nullable(),
       notes: zod.string().nullable(),
-      strategy: zod.string().nullable(),
     }),
   ),
   total: zod.number(),

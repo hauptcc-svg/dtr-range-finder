@@ -218,6 +218,8 @@ components:
           enum: [idle, london_range, london_entry, ny_range, ny_entry, eod_flat, daily_limit_hit]
         dailyPnl:
           type: number
+        unrealizedPnl:
+          type: number
         dailyLossLimit:
           type: number
         dailyProfitTarget:
@@ -238,6 +240,7 @@ components:
         - running
         - sessionPhase
         - dailyPnl
+        - unrealizedPnl
         - dailyLossLimit
         - dailyProfitTarget
         - tradeCount
@@ -279,6 +282,16 @@ components:
           type: ["number", "null"]
         lastPrice:
           type: ["number", "null"]
+        rbsLondon:
+          oneOf:
+            - $ref: "#/components/schemas/RbsStageSnapshot"
+            - type: "null"
+          description: "RBS state machine snapshot for the 2AM London session"
+        rbsNy:
+          oneOf:
+            - $ref: "#/components/schemas/RbsStageSnapshot"
+            - type: "null"
+          description: "RBS state machine snapshot for the 9AM NY session"
       required:
         - symbol
         - name
@@ -294,6 +307,33 @@ components:
         - rangeHigh
         - rangeLow
         - lastPrice
+        - rbsLondon
+        - rbsNy
+
+    RbsStageSnapshot:
+      type: object
+      properties:
+        shortStage:
+          type: integer
+          description: "0=idle, 1=swept, 2=bias_candle, 3=retested/pending"
+        longStage:
+          type: integer
+          description: "0=idle, 1=swept, 2=bias_candle, 3=retested/pending"
+        shortPending:
+          type: boolean
+        longPending:
+          type: boolean
+        shortSignalFired:
+          type: boolean
+        longSignalFired:
+          type: boolean
+      required:
+        - shortStage
+        - longStage
+        - shortPending
+        - longPending
+        - shortSignalFired
+        - longSignalFired
 
     Trade:
       type: object

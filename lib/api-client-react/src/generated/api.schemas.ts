@@ -26,6 +26,7 @@ export interface AgentStatus {
   running: boolean;
   sessionPhase: AgentStatusSessionPhase;
   dailyPnl: number;
+  unrealizedPnl: number;
   dailyLossLimit: number;
   dailyProfitTarget: number;
   tradeCount: number;
@@ -36,6 +37,17 @@ export interface AgentStatus {
   claudeAutonomousMode: boolean;
   /** @nullable */
   lastClaudeAutonomousTick: string | null;
+}
+
+export interface RbsStageSnapshot {
+  /** 0=idle, 1=swept, 2=bias_candle, 3=retested/pending */
+  shortStage: number;
+  /** 0=idle, 1=swept, 2=bias_candle, 3=retested/pending */
+  longStage: number;
+  shortPending: boolean;
+  longPending: boolean;
+  shortSignalFired: boolean;
+  longSignalFired: boolean;
 }
 
 export interface InstrumentStatus {
@@ -62,6 +74,10 @@ export interface InstrumentStatus {
   rangeLow: number | null;
   /** @nullable */
   lastPrice: number | null;
+  /** RBS state machine snapshot for the 2AM London session */
+  rbsLondon: RbsStageSnapshot | null;
+  /** RBS state machine snapshot for the 9AM NY session */
+  rbsNy: RbsStageSnapshot | null;
 }
 
 export type TradeDirection =

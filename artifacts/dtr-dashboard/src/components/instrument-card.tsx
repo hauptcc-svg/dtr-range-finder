@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { InstrumentStatus } from "@workspace/api-client-react";
+import { InstrumentStatus, RbsStageSnapshot } from "@workspace/api-client-react";
 import { formatCurrency, formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +42,52 @@ function Toggle({
         )}
       />
     </button>
+  );
+}
+
+const STAGE_LABELS: Record<number, string> = {
+  0: "Waiting for sweep",
+  1: "Swept",
+  2: "Bias candle fired",
+  3: "Retest pending",
+};
+
+function stageInfo(stage: number, pending: boolean, signalFired: boolean): { label: string; colorClass: string } {
+  if (signalFired || pending) return { label: `${stage} — Signal active`, colorClass: "text-yellow-400" };
+  switch (stage) {
+    case 0: return { label: `0 — ${STAGE_LABELS[0]}`, colorClass: "text-muted-foreground" };
+    case 1: return { label: `1 — ${STAGE_LABELS[1]}`, colorClass: "text-blue-400" };
+    case 2: return { label: `2 — ${STAGE_LABELS[2]}`, colorClass: "text-orange-400" };
+    case 3: return { label: `3 — ${STAGE_LABELS[3]}`, colorClass: "text-purple-400" };
+    default: return { label: `${stage}`, colorClass: "text-muted-foreground" };
+  }
+}
+
+function RbsSessionRow({ label, snapshot }: { label: string; snapshot: RbsStageSnapshot | null }) {
+  if (!snapshot) {
+    return (
+      <div className="grid grid-cols-[32px_1fr_1fr] gap-x-2 items-start">
+        <span className="text-[10px] text-muted-foreground uppercase font-mono font-bold pt-0.5">{label}</span>
+        <span className="text-[10px] text-muted-foreground col-span-2 italic">Not started</span>
+      </div>
+    );
+  }
+
+  const short = stageInfo(snapshot.shortStage, snapshot.shortPending, snapshot.shortSignalFired);
+  const long = stageInfo(snapshot.longStage, snapshot.longPending, snapshot.longSignalFired);
+
+  return (
+    <div className="grid grid-cols-[32px_1fr_1fr] gap-x-2 items-start">
+      <span className="text-[10px] text-muted-foreground uppercase font-mono font-bold pt-0.5">{label}</span>
+      <div>
+        <div className="text-[9px] text-muted-foreground uppercase font-mono mb-0.5">Short</div>
+        <div className={cn("text-[10px] font-mono leading-tight", short.colorClass)}>{short.label}</div>
+      </div>
+      <div>
+        <div className="text-[9px] text-muted-foreground uppercase font-mono mb-0.5">Long</div>
+        <div className={cn("text-[10px] font-mono leading-tight", long.colorClass)}>{long.label}</div>
+      </div>
+    </div>
   );
 }
 
@@ -157,6 +203,13 @@ export function InstrumentCard({ instrument, isAuthenticated }: InstrumentCardPr
             <span className="text-[10px] text-muted-foreground uppercase block">Range High</span>
             <span>{formatPrice(instrument.rangeHigh)}</span>
           </div>
+        </div>
+
+        {/* RBS Strategy Stage Section */}
+        <div className="border-t border-border/30 pt-3 grid gap-2">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider font-mono mb-1">RBS Stage</div>
+          <RbsSessionRow label="LON" snapshot={instrument.rbsLondon ?? null} />
+          <RbsSessionRow label="NY" snapshot={instrument.rbsNy ?? null} />
         </div>
 
         {/* Stats */}
