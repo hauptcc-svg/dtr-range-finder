@@ -24,6 +24,7 @@ import {
 } from "./dtr-strategy";
 import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, computeAtr, type ClaudeAdvice } from "./claude-advisor";
 import { checkAtrPullbackSignal, DEFAULT_ATR_PULLBACK_PARAMS } from "./atr-pullback-strategy";
+import type { AtrPullbackSignal } from "./atr-pullback-strategy";
 import { db, tradesTable, dailySummaryTable, instrumentConfigsTable, accountConfigsTable } from "@workspace/db";
 import type { InstrumentConfig as DbInstrumentConfigRow } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
@@ -558,6 +559,24 @@ class AgentController {
   }
 
   /**
+   * Choose the ATR signal that aligns with the intended trade direction.
+   * Prefers `signal5m` when it matches `isBuy`; falls back to `signal1m` if it
+   * matches instead; otherwise returns whichever is non-null (or null if both absent).
+   * This prevents a long trade from accidentally inheriting a short signal's stop.
+   */
+  private selectAlignedSignal(
+    isBuy: boolean,
+    signal5m: AtrPullbackSignal | null | undefined,
+    signal1m: AtrPullbackSignal | null | undefined,
+  ): AtrPullbackSignal | null {
+    const wants = isBuy ? "long" : "short";
+    if (signal5m && signal5m.direction === wants) return signal5m;
+    if (signal1m && signal1m.direction === wants) return signal1m;
+    // Neither signal aligns — don't use a mismatched signal
+    return null;
+  }
+
+  /**
    * Compute stop and TP for a Claude autonomous bracket order.
    * SL = from ATR signal (if present), else 1× ATR from bars, else 0.5% of price.
    * TP = sized to deliver ~$35 profit, clamped to [$20, $50], snapped to minTick.
@@ -566,7 +585,7 @@ class AgentController {
     isBuy: boolean,
     price: number,
     config: { pointValue: number; qty: number; minTick: number },
-    atrSignal: import("./atr-pullback-strategy").AtrPullbackSignal | null,
+    atrSignal: AtrPullbackSignal | null,
     bars5m: Array<{ t: string; o: number; h: number; l: number; c: number; v: number }>
   ): { stopPrice: number; tp1Price: number } {
     // --- Stop loss ---
@@ -699,7 +718,7 @@ class AgentController {
 
       // ── REVERSE ────────────────────────────────────────────────────────────
       if (decision.action === "reverse") {
-        if (!state.inPosition) continue;
+        if (!state.inPosition || !state.isClaudePosition) continue;
         const reverseDir = state.positionDirection === "long" ? "short" : "long";
         try {
           await this.client!.closePositionForContract(state.contractId);
@@ -709,7 +728,7 @@ class AgentController {
           const isBuy = reverseDir === "long";
           const price = state.lastPrice;
           if (!price) continue;
-          const activeSignal = reverseDir === "long" ? instrData?.signal5m ?? instrData?.signal1m : instrData?.signal5m ?? instrData?.signal1m;
+          const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
           const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal ?? null, instrData?.recentBars ?? []);
           const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
           const isScalp = decision.timeframe === "1m_scalp";
@@ -756,7 +775,7 @@ class AgentController {
         const isBuy = state.positionDirection === "long";
         const price = state.lastPrice;
         if (!price) continue;
-        const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+        const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
         const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
         try {
           const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
@@ -792,7 +811,7 @@ class AgentController {
       const price = state.lastPrice;
       if (!price) continue;
 
-      const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+      const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
       const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
 
       try {
@@ -989,7 +1008,7 @@ class AgentController {
 
         // ── REVERSE ──────────────────────────────────────────────────────────
         if (decision.action === "reverse") {
-          if (!state.inPosition) continue;
+          if (!state.inPosition || !state.isClaudePosition) continue;
           const reverseDir = state.positionDirection === "long" ? "short" : "long";
           try {
             await this.client!.closePositionForContract(state.contractId);
@@ -997,7 +1016,7 @@ class AgentController {
             const isBuy = reverseDir === "long";
             const price = state.lastPrice;
             if (!price) continue;
-            const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+            const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
             const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
             const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
             const [trade] = await db.insert(tradesTable).values({
@@ -1039,7 +1058,7 @@ class AgentController {
           const isBuy = state.positionDirection === "long";
           const price = state.lastPrice;
           if (!price) continue;
-          const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+          const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
           const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
           try {
             const orderResult = await this.client!.placeBracketOrder({ contractId: state.contractId, isBuy, qty: config.qty, stopPrice, tp1Price });
@@ -1073,7 +1092,7 @@ class AgentController {
         const price = state.lastPrice;
         if (!price) continue;
 
-        const activeSignal = instrData?.signal5m ?? instrData?.signal1m ?? null;
+        const activeSignal = this.selectAlignedSignal(isBuy, instrData?.signal5m, instrData?.signal1m);
         const { stopPrice, tp1Price } = this.computeClaudeBracket(isBuy, price, config, activeSignal, instrData?.recentBars ?? []);
 
         try {
@@ -1941,13 +1960,36 @@ class AgentController {
       if (heldMs < this.CLAUDE_MAX_HOLD_MS) continue;
 
       logger.warn({ symbol, heldMinutes: Math.round(heldMs / 60000) }, "enforceClaudeTimeStop: position held > 30 min — closing");
+      const closedDirection = state.positionDirection;
+      const closedEntry = state.positionEntryPrice;
+      const closedStack = state.positionStackCount;
+      const closedTradeId = state.openTradeId;
       try {
         await this.client.closePositionForContract(state.contractId);
+        // Immediately reset in-memory state so this position is not targeted again
+        state.inPosition = false;
+        state.isClaudePosition = false;
+        state.positionStackCount = 0;
+        state.positionDirection = null;
+        state.positionQty = 0;
+        state.positionEntryPrice = null;
+        state.positionStopPrice = null;
+        state.positionTp1Price = null;
+        state.positionOpenedAt = null;
+        state.openTradeId = null;
+        // Mark DB trade closed (best-effort; no exit price available at market)
+        if (closedTradeId) {
+          await db
+            .update(tradesTable)
+            .set({ status: "closed", exitTime: new Date(), pnl: 0 })
+            .where(eq(tradesTable.id, closedTradeId))
+            .catch(() => {});
+        }
         this.sendTelegram(
           `⏱ <b>TIME STOP</b> · DeclanCapital FX\n\n` +
           `<b>${symbol}</b> held > 30 min — auto-closed\n` +
-          `<b>Direction:</b> ${state.positionDirection?.toUpperCase() ?? "?"} | <b>Entry:</b> ${state.positionEntryPrice?.toFixed(2) ?? "?"}\n` +
-          `<b>Stack:</b> ${state.positionStackCount + 1}/${this.MAX_STACK}\n` +
+          `<b>Direction:</b> ${closedDirection?.toUpperCase() ?? "?"} | <b>Entry:</b> ${closedEntry?.toFixed(2) ?? "?"}\n` +
+          `<b>Stack:</b> ${closedStack + 1}/${this.MAX_STACK}\n` +
           `<i>${new Date().toUTCString()}</i>`
         ).catch(() => {});
       } catch (err) {
