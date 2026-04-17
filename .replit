@@ -29,7 +29,7 @@ isValidation = true
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/api-server && node --test --import tsx/esm src/__tests__/dtr-strategy.test.ts"
+args = "cd artifacts/api-server && node --test --import tsx/esm src/__tests__/dtr-strategy.test.ts src/__tests__/dtr-strategy-integration.test.mjs"
 
 [agent]
 stack = "PNPM_WORKSPACE"
