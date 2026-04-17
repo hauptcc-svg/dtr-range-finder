@@ -9,15 +9,17 @@ export interface InstrumentConfig {
   enabled: boolean;
   qty: number;
   tp1Qty: number;
-  londonRangeStart: string; // HH:MM
-  londonRangeEnd: string;
-  londonEntryStart: string;
-  londonEntryEnd: string;
-  nyRangeStart: string;
-  nyRangeEnd: string;
-  nyEntryStart: string;
-  nyEntryEnd: string;
+  londonRangeStart: string;   // HH:MM — 2AM session range start (01:12)
+  londonRangeEnd: string;     // HH:MM — 2AM session range end   (02:13)
+  londonEntryStart: string;   // HH:MM — 2AM session break start (02:13)
+  londonEntryEnd: string;     // HH:MM — 2AM session break end   (sess2EntryEnd, default 04:00)
+  nyRangeStart: string;       // HH:MM — 9AM session range start (08:12)
+  nyRangeEnd: string;         // HH:MM — 9AM session range end   (09:13)
+  nyEntryStart: string;       // HH:MM — 9AM session break start (09:13)
+  nyEntryEnd: string;         // HH:MM — 9AM session break end   (sessionEnd, default 12:00)
+  /** ATR(14) multiplier for bias candle body size filter (PineScript fvgSizeMult, default 1.5) */
   biasCandle_atrMult: number;
+  /** ATR(14) buffer added to SL (default 0.0 = exact bias candle extreme) */
   slAtrBuffer: number;
   tpMode: "Range Target";
   maxTradesPerDay: number;
@@ -26,6 +28,8 @@ export interface InstrumentConfig {
   minTick: number;
   /** Which signal engine drives this instrument */
   strategyMode: "dtr" | "atr_pullback";
+  /** HH:MM NY — 2AM session break/entry window end (configurable, stored in DB as sess2EntryEnd) */
+  sess2EntryEnd: string;
 }
 
 export interface TradingConfig {
@@ -50,14 +54,14 @@ export const TRADING_CONFIG: TradingConfig = {
       qty: 2,
       tp1Qty: 1,
       londonRangeStart: "01:12",
-      londonRangeEnd: "02:13",
-      londonEntryStart: "03:13",
-      londonEntryEnd: "07:00",
-      nyRangeStart: "08:12",
-      nyRangeEnd: "09:13",
-      nyEntryStart: "09:13",
-      nyEntryEnd: "14:00",
-      biasCandle_atrMult: 0.5,
+      londonRangeEnd:   "02:13",
+      londonEntryStart: "02:13",
+      londonEntryEnd:   "04:00",
+      nyRangeStart:     "08:12",
+      nyRangeEnd:       "09:13",
+      nyEntryStart:     "09:13",
+      nyEntryEnd:       "12:00",
+      biasCandle_atrMult: 1.5,
       slAtrBuffer: 0.0,
       tpMode: "Range Target",
       maxTradesPerDay: 4,
@@ -65,6 +69,7 @@ export const TRADING_CONFIG: TradingConfig = {
       pointValue: 0.5,
       minTick: 1,
       strategyMode: "atr_pullback",
+      sess2EntryEnd: "04:00",
     },
     MCLK6: {
       symbol: "MCLK6",
@@ -73,14 +78,14 @@ export const TRADING_CONFIG: TradingConfig = {
       qty: 2,
       tp1Qty: 1,
       londonRangeStart: "01:12",
-      londonRangeEnd: "02:13",
-      londonEntryStart: "03:13",
-      londonEntryEnd: "07:00",
-      nyRangeStart: "08:12",
-      nyRangeEnd: "09:13",
-      nyEntryStart: "09:13",
-      nyEntryEnd: "14:00",
-      biasCandle_atrMult: 0.5,
+      londonRangeEnd:   "02:13",
+      londonEntryStart: "02:13",
+      londonEntryEnd:   "04:00",
+      nyRangeStart:     "08:12",
+      nyRangeEnd:       "09:13",
+      nyEntryStart:     "09:13",
+      nyEntryEnd:       "12:00",
+      biasCandle_atrMult: 1.5,
       slAtrBuffer: 0.0,
       tpMode: "Range Target",
       maxTradesPerDay: 4,
@@ -88,6 +93,7 @@ export const TRADING_CONFIG: TradingConfig = {
       pointValue: 1.0,
       minTick: 0.01,
       strategyMode: "dtr",
+      sess2EntryEnd: "04:00",
     },
     MGCM6: {
       symbol: "MGCM6",
@@ -96,14 +102,14 @@ export const TRADING_CONFIG: TradingConfig = {
       qty: 2,
       tp1Qty: 1,
       londonRangeStart: "01:12",
-      londonRangeEnd: "02:13",
-      londonEntryStart: "03:13",
-      londonEntryEnd: "07:00",
-      nyRangeStart: "08:12",
-      nyRangeEnd: "09:13",
-      nyEntryStart: "09:13",
-      nyEntryEnd: "14:00",
-      biasCandle_atrMult: 0.5,
+      londonRangeEnd:   "02:13",
+      londonEntryStart: "02:13",
+      londonEntryEnd:   "04:00",
+      nyRangeStart:     "08:12",
+      nyRangeEnd:       "09:13",
+      nyEntryStart:     "09:13",
+      nyEntryEnd:       "12:00",
+      biasCandle_atrMult: 1.5,
       slAtrBuffer: 0.0,
       tpMode: "Range Target",
       maxTradesPerDay: 4,
@@ -111,6 +117,7 @@ export const TRADING_CONFIG: TradingConfig = {
       pointValue: 1.0,
       minTick: 0.1,
       strategyMode: "dtr",
+      sess2EntryEnd: "04:00",
     },
     MNQM6: {
       symbol: "MNQM6",
@@ -119,14 +126,14 @@ export const TRADING_CONFIG: TradingConfig = {
       qty: 3,
       tp1Qty: 1,
       londonRangeStart: "01:12",
-      londonRangeEnd: "02:13",
-      londonEntryStart: "03:13",
-      londonEntryEnd: "07:00",
-      nyRangeStart: "08:12",
-      nyRangeEnd: "09:13",
-      nyEntryStart: "09:13",
-      nyEntryEnd: "14:00",
-      biasCandle_atrMult: 0.5,
+      londonRangeEnd:   "02:13",
+      londonEntryStart: "02:13",
+      londonEntryEnd:   "04:00",
+      nyRangeStart:     "08:12",
+      nyRangeEnd:       "09:13",
+      nyEntryStart:     "09:13",
+      nyEntryEnd:       "12:00",
+      biasCandle_atrMult: 1.5,
       slAtrBuffer: 0.0,
       tpMode: "Range Target",
       maxTradesPerDay: 4,
@@ -134,6 +141,7 @@ export const TRADING_CONFIG: TradingConfig = {
       pointValue: 0.5,
       minTick: 0.25,
       strategyMode: "atr_pullback",
+      sess2EntryEnd: "04:00",
     },
   },
 };
@@ -150,12 +158,9 @@ export function nyWallClockToUtc(nyDateStr: string, timeStr: string): Date {
   const [h, m] = timeStr.split(":").map(Number);
   const [year, month, day] = nyDateStr.split("-").map(Number);
 
-  // Binary-search for the UTC instant whose NY wall-clock time equals the target.
-  // Start with a rough estimate: UTC = target - 5h (EST, non-DST).
   const roughUtcMs = Date.UTC(year, month - 1, day, h + 5, m, 0);
   const roughDate = new Date(roughUtcMs);
 
-  // Read back what NY wall-clock the rough estimate maps to
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric",
@@ -177,17 +182,13 @@ export function nyWallClockToUtc(nyDateStr: string, timeStr: string): Date {
     Number(partMap.second)
   );
 
-  // The UTC offset in ms at this moment (positive = NY is behind UTC)
   const offsetMs = roughNYMs - roughDate.getTime();
-
-  // True UTC = target NY wall-clock - NY offset
   const targetNYMs = Date.UTC(year, month - 1, day, h, m, 0);
   return new Date(targetNYMs - offsetMs);
 }
 
 /**
  * Parse time string "HH:MM" and create a Date for today in NY timezone.
- * Returns a proper UTC Date that represents that NY wall-clock moment today.
  */
 export function todayAtNY(timeStr: string): Date {
   const nyDateStr = currentNYDate();

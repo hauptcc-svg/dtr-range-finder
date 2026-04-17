@@ -15,7 +15,7 @@ router.get("/instrument-configs", async (_req, res): Promise<void> => {
 
 router.post("/instrument-configs", requireAgentKeyOrSession, async (req: Request, res: Response): Promise<void> => {
   const body = req.body as Record<string, unknown>;
-  const { symbol, name, enabled, qty, pointValue, minTick, maxTradesPerDay, strategyMode, sessionStart, sessionEnd } = body;
+  const { symbol, name, enabled, qty, pointValue, minTick, maxTradesPerDay, strategyMode, sess2EntryEnd, sessionStart, sessionEnd } = body;
 
   if (!symbol || !name) {
     res.status(400).json({ error: "symbol and name are required" });
@@ -34,8 +34,9 @@ router.post("/instrument-configs", requireAgentKeyOrSession, async (req: Request
         minTick: typeof minTick === "number" ? minTick : 0.25,
         maxTradesPerDay: typeof maxTradesPerDay === "number" ? maxTradesPerDay : 4,
         strategyMode: typeof strategyMode === "string" ? strategyMode : "dtr",
+        sess2EntryEnd: typeof sess2EntryEnd === "string" ? sess2EntryEnd : "04:00",
         sessionStart: typeof sessionStart === "string" ? sessionStart : "09:13",
-        sessionEnd: typeof sessionEnd === "string" ? sessionEnd : "14:00",
+        sessionEnd: typeof sessionEnd === "string" ? sessionEnd : "12:00",
         createdAt: new Date(),
         updatedAt: new Date(),
       })
@@ -49,8 +50,9 @@ router.post("/instrument-configs", requireAgentKeyOrSession, async (req: Request
           minTick: typeof minTick === "number" ? minTick : 0.25,
           maxTradesPerDay: typeof maxTradesPerDay === "number" ? maxTradesPerDay : 4,
           strategyMode: typeof strategyMode === "string" ? strategyMode : "dtr",
+          sess2EntryEnd: typeof sess2EntryEnd === "string" ? sess2EntryEnd : "04:00",
           sessionStart: typeof sessionStart === "string" ? sessionStart : "09:13",
-          sessionEnd: typeof sessionEnd === "string" ? sessionEnd : "14:00",
+          sessionEnd: typeof sessionEnd === "string" ? sessionEnd : "12:00",
           updatedAt: new Date(),
         },
       })
@@ -84,6 +86,7 @@ router.patch("/instrument-configs/:symbol", requireAgentKeyOrSession, async (req
   if (typeof body.minTick === "number") updates.minTick = body.minTick;
   if (typeof body.maxTradesPerDay === "number") updates.maxTradesPerDay = body.maxTradesPerDay;
   if (typeof body.strategyMode === "string") updates.strategyMode = body.strategyMode;
+  if (typeof body.sess2EntryEnd === "string") updates.sess2EntryEnd = body.sess2EntryEnd;
   if (typeof body.sessionStart === "string") updates.sessionStart = body.sessionStart;
   if (typeof body.sessionEnd === "string") updates.sessionEnd = body.sessionEnd;
 

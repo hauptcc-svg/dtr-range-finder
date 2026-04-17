@@ -52,8 +52,9 @@ export const instrumentConfigsTable = pgTable("instrument_configs", {
   minTick: real("min_tick").notNull().default(0.25),
   maxTradesPerDay: integer("max_trades_per_day").notNull().default(4),
   strategyMode: text("strategy_mode").notNull().default("dtr"), // 'dtr' | 'atr_pullback'
-  sessionStart: text("session_start").notNull().default("09:13"), // HH:MM NY
-  sessionEnd: text("session_end").notNull().default("14:00"), // HH:MM NY
+  sessionStart: text("session_start").notNull().default("09:13"), // HH:MM NY — 9AM break/entry window start
+  sessionEnd: text("session_end").notNull().default("12:00"),     // HH:MM NY — 9AM break/entry window end
+  sess2EntryEnd: text("sess2_entry_end").notNull().default("04:00"), // HH:MM NY — 2AM break/entry window end
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

@@ -14,9 +14,11 @@ import { TRADING_CONFIG, isInTimeWindow, currentNYDate, currentNYDayOfWeek, toda
 import {
   computeRange,
   checkEntrySignal,
+  buildRbsSession,
   createInstrumentState,
   calculatePnl,
   type InstrumentState,
+  type EntrySignal,
 } from "./dtr-strategy";
 import { getClaudeTradeAdvice, getClaudeAutonomousAdvice, type ClaudeAdvice } from "./claude-advisor";
 import { checkAtrPullbackSignal, DEFAULT_ATR_PULLBACK_PARAMS } from "./atr-pullback-strategy";
@@ -144,16 +146,18 @@ class AgentController {
       strategyMode: dbRow.strategyMode as "dtr" | "atr_pullback",
       sessionStart: dbRow.sessionStart,
       sessionEnd: dbRow.sessionEnd,
+      // sess2EntryEnd is now a DB column; fall back to static config or default
+      sess2EntryEnd: (dbRow as any).sess2EntryEnd ?? staticCfg?.sess2EntryEnd ?? "04:00",
       // Strategy-specific fields not yet in DB — use static config if available, else defaults
       tp1Qty: staticCfg?.tp1Qty ?? 1,
       maxLossesPerDirection: staticCfg?.maxLossesPerDirection ?? 2,
-      biasCandle_atrMult: staticCfg?.biasCandle_atrMult ?? 0.5,
+      biasCandle_atrMult: staticCfg?.biasCandle_atrMult ?? 1.5,
       slAtrBuffer: staticCfg?.slAtrBuffer ?? 0.0,
       tpMode: (staticCfg?.tpMode ?? "Range Target") as "Range Target",
       londonRangeStart: staticCfg?.londonRangeStart ?? "01:12",
       londonRangeEnd: staticCfg?.londonRangeEnd ?? "02:13",
-      londonEntryStart: staticCfg?.londonEntryStart ?? "03:13",
-      londonEntryEnd: staticCfg?.londonEntryEnd ?? "07:00",
+      londonEntryStart: "02:13",
+      londonEntryEnd: (dbRow as any).sess2EntryEnd ?? staticCfg?.sess2EntryEnd ?? "04:00",
       nyRangeStart: staticCfg?.nyRangeStart ?? "08:12",
       nyRangeEnd: staticCfg?.nyRangeEnd ?? "09:13",
     };
@@ -874,6 +878,16 @@ class AgentController {
     // -------------------------------------------------------------------------
     // DTR RULES MODE: use range data for stops/targets
     // -------------------------------------------------------------------------
+
+    // Force-refresh open positions so Claude sees current position state (not stale 60s cache)
+    try {
+      this.previousPositionsCache = this.openPositionsCache;
+      this.openPositionsCache = await this.client.getOpenPositions(this.buildPointValueMap());
+      this.lastPositionFetch = Date.now();
+      await this.syncPositionStates();
+    } catch (err) {
+      logger.warn({ err }, "Position refresh before Claude analysis failed (non-fatal)");
+    }
 
     // Update last prices before sending to Claude
     for (const { state } of eligibleInstruments) {
@@ -1905,10 +1919,10 @@ class AgentController {
   /**
    * Returns the latest sessionEnd across all enabled DTR instruments in DB.
    * This drives the NY entry window so new instruments with later sessions work correctly.
-   * Falls back to "14:00" if no DTR instruments are configured.
+   * Falls back to "12:00" if no DTR instruments are configured.
    */
   private getNyEntryEnd(): string {
-    let latest = "14:00";
+    let latest = "12:00";
     for (const row of this.dbConfigs.values()) {
       if (!row.enabled) continue;
       if (row.strategyMode === "atr_pullback") continue;
@@ -1917,15 +1931,31 @@ class AgentController {
     return latest;
   }
 
+  /**
+   * Returns the latest sess2EntryEnd across all enabled DTR instruments in DB.
+   * Drives the 2AM (London) break/entry window end time.
+   * Falls back to "04:00" if no DTR instruments are configured.
+   */
+  private getSess2EntryEnd(): string {
+    let latest = "04:00";
+    for (const row of this.dbConfigs.values()) {
+      if (!row.enabled) continue;
+      if (row.strategyMode === "atr_pullback") continue;
+      const s2 = (row as any).sess2EntryEnd ?? "04:00";
+      if (s2 > latest) latest = s2;
+    }
+    return latest;
+  }
+
   private getCurrentPhase(): SessionPhase {
-    // London range: 01:12–02:13
+    // 2AM London range: 01:12–02:13
     if (isInTimeWindow("01:12", "02:13")) return "london_range";
-    // London entry: 03:13–07:00
-    if (isInTimeWindow("03:13", "07:00")) return "london_entry";
-    // NY range: 08:12–09:13
+    // 2AM London entry/break window: 02:13 – sess2EntryEnd (default 04:00, configurable)
+    const sess2End = this.getSess2EntryEnd();
+    if (isInTimeWindow("02:13", sess2End)) return "london_entry";
+    // 9AM NY range: 08:12–09:13
     if (isInTimeWindow("08:12", "09:13")) return "ny_range";
-    // NY entry: 09:13 until the latest sessionEnd across all enabled DTR instruments (from DB).
-    // Per-instrument DB session windows are the primary gate within this broader phase.
+    // 9AM NY entry/break window: 09:13 – sessionEnd (default 12:00, configurable per instrument)
     const nyEntryEnd = this.getNyEntryEnd();
     if (isInTimeWindow("09:13", nyEntryEnd)) return "ny_entry";
     // EOD flat: from nyEntryEnd until 21:00 (close out all remaining positions)
@@ -2226,131 +2256,191 @@ class AgentController {
     }
   }
 
+  /**
+   * DTR Entry Phase — RBS + 3CR state machine.
+   *
+   * For each DTR instrument:
+   *   1. Fetch 1-min bars from range window start through now.
+   *   2. Run RBS state machines (SHORT + LONG) over the break window bars.
+   *   3. If BOS fired on the last bar (pending=true), place a bracket order.
+   *
+   * The break window boundaries:
+   *   London session: range 01:12–02:13, break 02:13–sess2EntryEnd  (default 04:00)
+   *   NY session:     range 08:12–09:13, break 09:13–sessionEnd       (default 12:00)
+   */
   private async processEntryPhase(session: "london" | "ny"): Promise<void> {
     if (!this.client) return;
+
+    const rangeStartNY  = session === "london" ? "01:12" : "08:12";
+    const rangeEndNY    = session === "london" ? "02:13" : "09:13";
 
     for (const [symbol, state] of this.instrumentStates) {
       const config = this.getEffectiveConfig(symbol);
       if (!this.isInstrumentEnabled(symbol)) continue;
       if (!state.contractId) continue;
-      // ATR pullback instruments are handled by processAtrPullbackSignals, not DTR entry phase
+      // ATR pullback instruments handled separately
       if (config?.strategyMode === "atr_pullback") continue;
-      if (!state.rangeData) continue;
       if (state.inPosition) continue;
       if (state.todayTrades >= this.effectiveMaxTrades(symbol)) continue;
-      // Per-instrument session window from DB is the primary gate for NY entry
-      if (session === "ny" && config) {
-        if (!isInTimeWindow(config.sessionStart, config.sessionEnd)) continue;
-      }
 
-      // Build effective config — runtime overrides fully replace config values when set
-      const effectiveConfig = {
-        ...config,
-        maxLossesPerDirection: this.effectiveMaxLossesPerDirection(symbol),
-      };
+      // Per-instrument break window end
+      const breakEndNY = session === "london"
+        ? (config?.sess2EntryEnd ?? "04:00")
+        : (config?.sessionEnd ?? "12:00");
+
+      // Only run within the break/entry window
+      if (!isInTimeWindow(rangeEndNY, breakEndNY)) continue;
+
+      const effectiveMaxLossDir = this.effectiveMaxLossesPerDirection(symbol);
 
       try {
-        const lastPrice = await this.client.getLastPrice(state.contractId);
-        if (!lastPrice) continue;
-        state.lastPrice = lastPrice;
+        // Fetch all bars from range window start through now
+        const rangeStartUtc = todayAtNY(rangeStartNY);
+        const nowUtc        = new Date();
+        const bars = await this.client.getBars(state.contractId, rangeStartUtc, nowUtc);
 
-        const signal = checkEntrySignal(lastPrice, state.rangeData, state, effectiveConfig);
-        if (!signal) continue;
+        if (bars.length === 0) continue;
 
-        logger.info({ symbol, signal }, "Entry signal detected, placing order");
+        // Update last price from most recent bar
+        state.lastPrice = bars[bars.length - 1].c;
 
-        // Phase 1: place entry + bracket, detect entry-only vs bracket-only failures
-        let orderResult: OrderResult | null = null;
-        let bracketFailed = false;
-        try {
-          orderResult = await this.client.placeBracketOrder({
-            contractId: state.contractId,
-            isBuy: signal.direction === "long",
-            qty: config.qty,
-            stopPrice: signal.stopPrice,
-            tp1Price: signal.tp1Price,
-            tp2Price: signal.tp2Price,
-          });
-        } catch (bracketErr) {
-          if (bracketErr instanceof BracketOrderError) {
-            // Entry market order confirmed filled; bracket (SL/TP) placement failed.
-            // Track the position so the healer can re-place brackets on the next tick.
-            bracketFailed = true;
-            orderResult = { orderId: bracketErr.entryOrderId, status: "bracket_failed" };
-            logger.error({ bracketErr, symbol }, "ALERT: Entry filled but bracket failed — tracking for healer");
-            this.sendTelegram(
-              `🚨 <b>BRACKET FAILURE</b> · DeclanCapital FX\n\n` +
-              `<b>${symbol}</b> entry filled but SL/TP placement failed\n` +
-              `Position is tracked — healer will re-place brackets on next tick\n` +
-              `<i>${new Date().toUTCString()}</i>`
-            ).catch(() => {});
-          } else {
-            // EntryOrderError (broker rejection) OR any network/transport error:
-            // in both cases no position was opened — abort without any state mutation.
-            logger.error({ bracketErr, symbol }, "Entry order failed or errored — no position opened, aborting signal");
-            continue;
-          }
+        // Run RBS state machines
+        const rbsResult = buildRbsSession(
+          bars,
+          todayAtNY(rangeEndNY).getTime(),
+          todayAtNY(rangeEndNY).getTime(), // break starts at range end
+          todayAtNY(breakEndNY).getTime(),
+          config?.biasCandle_atrMult ?? 1.5,
+          config?.slAtrBuffer ?? 0.0,
+          state.lastPrice,
+          config?.minTick ?? 0.01,
+        );
+
+        // Update rangeData for dashboard display
+        if (rbsResult.rangeHigh && rbsResult.rangeLow) {
+          state.rangeData = {
+            high: rbsResult.rangeHigh,
+            low: rbsResult.rangeLow,
+            midpoint: (rbsResult.rangeHigh + rbsResult.rangeLow) / 2,
+            bias: "neutral",
+            biasCandle: null,
+            width: rbsResult.rangeHigh - rbsResult.rangeLow,
+          };
+          // Store full RBS result for display
+          if (session === "london") state.rbs2 = rbsResult;
+          else state.rbs9 = rbsResult;
         }
 
-        if (!orderResult) continue;
+        // Check signals — process short then long (priority: whichever fires first this tick)
+        const candidates = [rbsResult.shortSignal, rbsResult.longSignal].filter(Boolean) as EntrySignal[];
 
-        // Phase 2: record in DB + update state (runs even when bracket partially failed)
-        const [trade] = await db
-          .insert(tradesTable)
-          .values({
-            instrument: symbol,
-            direction: signal.direction,
-            entryPrice: signal.entryPrice,
-            exitPrice: null,
-            qty: config.qty,
-            pnl: null,
-            session,
-            status: "open",
-            entryTime: new Date(),
-            exitTime: null,
-            stopPrice: signal.stopPrice,
-            tp1Price: signal.tp1Price,
-            tp2Price: signal.tp2Price,
-            projectxOrderId: orderResult.orderId,
-            strategy: "dtr",
-          })
-          .returning();
+        for (const signal of candidates) {
+          if (state.inPosition) break; // only one trade per instrument per tick
+          if (signal.direction === "short" && state.shortLosses >= effectiveMaxLossDir) continue;
+          if (signal.direction === "long"  && state.longLosses  >= effectiveMaxLossDir) continue;
+          if (this.dailyPnl <= -this.effectiveLossLimit()) break;
 
-        // Update instrument state
-        state.inPosition = true;
-        state.positionDirection = signal.direction;
-        state.positionQty = config.qty;
-        state.positionEntryPrice = signal.entryPrice;
-        state.positionStopPrice = signal.stopPrice;
-        state.positionTp1Price = signal.tp1Price;
-        state.positionOpenedAt = new Date().toISOString();
-        state.openTradeId = trade.id;
-        state.todayTrades++;
-
-        // Always count the trade and update daily summary (bracket failure = trade still entered)
-        this.tradeCount++;
-        await this.updateDailySummary();
-
-        if (bracketFailed) continue; // State + counters recorded; healer handles brackets
-
-        this.sendTelegram(
-          `📈 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
-          `<b>${config.name ?? symbol}</b> (${symbol})\n` +
-          `<b>Direction:</b> ${signal.direction.toUpperCase()}\n` +
-          `<b>Qty:</b> ${config.qty}\n` +
-          `<b>Entry:</b> ${signal.entryPrice.toFixed(2)}\n` +
-          `<b>Stop:</b> ${signal.stopPrice.toFixed(2)}\n` +
-          `<b>TP1:</b> ${signal.tp1Price.toFixed(2)}\n` +
-          `<b>TP2:</b> ${signal.tp2Price != null ? signal.tp2Price.toFixed(2) : "—"}\n` +
-          `<b>Session:</b> ${session.toUpperCase()}\n` +
-          `<b>Mode:</b> DTR Rules\n` +
-          `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
-          `<i>${new Date().toUTCString()}</i>`
-        ).catch(() => {});
+          logger.info({ symbol, signal }, "RBS BOS signal — placing order");
+          await this.placeRbsEntry(symbol, state, config!, signal, session);
+          break; // one entry per tick per instrument
+        }
       } catch (err) {
-        logger.error({ err, symbol }, "Error processing entry signal");
+        logger.error({ err, symbol }, "Error in RBS entry phase");
       }
     }
+  }
+
+  /**
+   * Place a bracket order for an RBS entry signal and record the trade.
+   */
+  private async placeRbsEntry(
+    symbol: string,
+    state: InstrumentState,
+    config: NonNullable<ReturnType<typeof this.getEffectiveConfig>>,
+    signal: EntrySignal,
+    session: "london" | "ny",
+  ): Promise<void> {
+    if (!this.client || !state.contractId) return;
+
+    let orderResult: OrderResult | null = null;
+    let bracketFailed = false;
+
+    try {
+      orderResult = await this.client.placeBracketOrder({
+        contractId: state.contractId,
+        isBuy: signal.direction === "long",
+        qty: config.qty,
+        stopPrice: signal.stopPrice,
+        tp1Price: signal.tp1Price,
+        tp2Price: signal.tp2Price,
+      });
+    } catch (bracketErr) {
+      if (bracketErr instanceof BracketOrderError) {
+        bracketFailed = true;
+        orderResult = { orderId: bracketErr.entryOrderId, status: "bracket_failed" };
+        logger.error({ bracketErr, symbol }, "ALERT: Entry filled but bracket failed — tracking for healer");
+        this.sendTelegram(
+          `🚨 <b>BRACKET FAILURE</b> · DeclanCapital FX\n\n` +
+          `<b>${symbol}</b> entry filled but SL/TP placement failed\n` +
+          `Position is tracked — healer will re-place brackets on next tick\n` +
+          `<i>${new Date().toUTCString()}</i>`
+        ).catch(() => {});
+      } else {
+        logger.error({ bracketErr, symbol }, "Entry order failed — no position opened, aborting signal");
+        return;
+      }
+    }
+
+    if (!orderResult) return;
+
+    const [trade] = await db
+      .insert(tradesTable)
+      .values({
+        instrument: symbol,
+        direction: signal.direction,
+        entryPrice: signal.entryPrice,
+        exitPrice: null,
+        qty: config.qty,
+        pnl: null,
+        session,
+        status: "open",
+        entryTime: new Date(),
+        exitTime: null,
+        stopPrice: signal.stopPrice,
+        tp1Price: signal.tp1Price,
+        tp2Price: signal.tp2Price,
+        projectxOrderId: orderResult.orderId,
+        strategy: "dtr",
+      })
+      .returning();
+
+    state.inPosition = true;
+    state.positionDirection = signal.direction;
+    state.positionQty = config.qty;
+    state.positionEntryPrice = signal.entryPrice;
+    state.positionStopPrice = signal.stopPrice;
+    state.positionTp1Price = signal.tp1Price;
+    state.positionOpenedAt = new Date().toISOString();
+    state.openTradeId = trade.id;
+    state.todayTrades++;
+
+    this.tradeCount++;
+    await this.updateDailySummary();
+
+    if (bracketFailed) return;
+
+    this.sendTelegram(
+      `📈 <b>DTR TRADE ENTERED</b> · DeclanCapital FX\n\n` +
+      `<b>${config.name ?? symbol}</b> (${symbol})\n` +
+      `<b>Direction:</b> ${signal.direction.toUpperCase()}\n` +
+      `<b>Qty:</b> ${config.qty}\n` +
+      `<b>Entry:</b> ${signal.entryPrice.toFixed(2)}\n` +
+      `<b>Stop:</b> ${signal.stopPrice.toFixed(2)}\n` +
+      `<b>TP:</b> ${signal.tp1Price.toFixed(2)}\n` +
+      `<b>Session:</b> ${session.toUpperCase()} · <b>Strategy:</b> RBS+3CR\n` +
+      `<b>Daily P&amp;L:</b> ${this.dailyPnl >= 0 ? "+" : ""}$${this.dailyPnl.toFixed(2)}\n` +
+      `<i>${new Date().toUTCString()}</i>`
+    ).catch(() => {});
   }
 
   private async processEodFlat(): Promise<void> {
