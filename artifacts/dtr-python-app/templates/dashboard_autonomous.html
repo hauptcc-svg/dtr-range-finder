@@ -1726,8 +1726,8 @@ async function exportTrades(format) {
 // ─── Pairs manager ───────────────────────────────────────────────────────────
 
 const PAIR_PRESETS = {
-    MYMM6: { symbol: 'MYMM6', name: 'Micro Dow (MYM)',       qty: 2, pointValue: 0.5,     minTick: 1,      strategyMode: 'atr_pullback', sessionStart: '09:13', sessionEnd: '12:00', sess2EntryEnd: '04:00', maxTradesPerDay: 4 },
-    MNQM6: { symbol: 'MNQM6', name: 'Micro NQ (Nasdaq)',     qty: 3, pointValue: 0.5,     minTick: 0.25,   strategyMode: 'atr_pullback', sessionStart: '09:13', sessionEnd: '12:00', sess2EntryEnd: '04:00', maxTradesPerDay: 4 },
+    MYMM6: { symbol: 'MYMM6', name: 'Micro Dow (MYM)',       qty: 2, pointValue: 0.5,     minTick: 1,      strategyMode: 'atr_pullback', sessionStart: '09:13', sessionEnd: '14:00', sess2EntryEnd: '04:00', maxTradesPerDay: 4 },
+    MNQM6: { symbol: 'MNQM6', name: 'Micro NQ (Nasdaq)',     qty: 3, pointValue: 0.5,     minTick: 0.25,   strategyMode: 'atr_pullback', sessionStart: '09:13', sessionEnd: '14:00', sess2EntryEnd: '04:00', maxTradesPerDay: 4 },
     MESM6: { symbol: 'MESM6', name: 'Micro S&P 500 (MES)',   qty: 2, pointValue: 5.0,     minTick: 0.25,   strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '12:00', sess2EntryEnd: '04:00', maxTradesPerDay: 4 },
     MCLK6: { symbol: 'MCLK6', name: 'Micro Crude Oil',       qty: 2, pointValue: 1.0,     minTick: 0.01,   strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '12:00', sess2EntryEnd: '04:00', maxTradesPerDay: 4 },
     MGCM6: { symbol: 'MGCM6', name: 'Micro Gold',            qty: 2, pointValue: 1.0,     minTick: 0.1,    strategyMode: 'dtr',          sessionStart: '09:13', sessionEnd: '12:00', sess2EntryEnd: '04:00', maxTradesPerDay: 4 },
@@ -1805,7 +1805,7 @@ function openPairModal(pair) {
     document.getElementById('pf-qty').value = pair ? pair.qty : 1;
     document.getElementById('pf-sess2-end').value = pair ? (pair.sess2EntryEnd || '04:00') : '04:00';
     document.getElementById('pf-session-start').value = pair ? pair.sessionStart : '09:13';
-    document.getElementById('pf-session-end').value = pair ? pair.sessionEnd : '12:00';
+    document.getElementById('pf-session-end').value = pair ? pair.sessionEnd : '14:00';
     document.getElementById('pf-point-value').value = pair ? pair.pointValue : 1.0;
     document.getElementById('pf-min-tick').value = pair ? pair.minTick : 0.25;
     document.getElementById('pf-max-trades').value = pair ? pair.maxTradesPerDay : 4;
@@ -1831,7 +1831,7 @@ async function savePair() {
         qty: parseInt(document.getElementById('pf-qty').value, 10) || 1,
         sess2EntryEnd: document.getElementById('pf-sess2-end').value.trim() || '04:00',
         sessionStart: document.getElementById('pf-session-start').value.trim() || '09:13',
-        sessionEnd: document.getElementById('pf-session-end').value.trim() || '12:00',
+        sessionEnd: document.getElementById('pf-session-end').value.trim() || '14:00',
         pointValue: parseFloat(document.getElementById('pf-point-value').value) || 1.0,
         minTick: parseFloat(document.getElementById('pf-min-tick').value) || 0.25,
         maxTradesPerDay: parseInt(document.getElementById('pf-max-trades').value, 10) || 4,
