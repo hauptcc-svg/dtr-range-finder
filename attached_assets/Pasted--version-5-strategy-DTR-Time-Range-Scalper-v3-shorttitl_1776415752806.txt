@@ -1,0 +1,866 @@
+//@version=5
+strategy("DTR Time Range Scalper v3", shorttitle="DTR v3", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, default_qty_type=strategy.fixed, default_qty_value=3, initial_capital=10000, commission_type=strategy.commission.cash_per_contract, commission_value=0.50, slippage=1, calc_on_every_tick=true, process_orders_on_close=true)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DTR TIME RANGE SCALPER v3 — DayTradingRauf Methodology
+// ───────────────────────────────────────────────────────────────────────────
+// ENTRY MODEL — RBS + 3CR (single unified mode):
+//   Step 1 — Range forms during session window (1:12-2:12 / 8:12-9:12)
+//   Step 2 — Candle CLOSES outside range → sweep establishes bias
+//   Step 3 — Very next candle is a big bias candle (body >= ATR × mult)
+//   Step 4 — Any candle wicks back into bias candle body (retest)
+//   Step 5 — A 3CR candle closes beyond bias candle near-side (BOS)
+//             3CR filter: BOS candle body >= 50% of prior candle body
+//             BOS only valid after 3:12 AM (2AM session) / 9:12 AM (9AM)
+//   ENTRY  — Next bar open after BOS confirmed
+//   SL     — Bias candle far-side + ATR × buffer
+//   TP     — Opposing range boundary (or Fixed R:R if selected)
+// ═══════════════════════════════════════════════════════════════════════════
+
+var string TZ = "America/New_York"
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 1 — CONTRACT
+// ═══════════════════════════════════════════════════════════════════════════
+g1      = "1. Contract"
+cn      = input.string("NAS100", "Contract Name",       group=g1, tooltip="Must match your webhook routing — e.g. NAS100, XAUUSD, MNQ1!, GC1!")
+qty     = input.int(3,           "Contracts per Trade", group=g1, minval=1, maxval=20)
+tp1_qty = input.int(1,           "TP1 Contracts",       group=g1, minval=1)
+tp2_qty = input.int(1,           "TP2 Contracts",       group=g1, minval=1)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 2 — 2 AM SESSION (London)  [session strings in America/New_York]
+// ═══════════════════════════════════════════════════════════════════════════
+g2       = "2. 2 AM Session (London)"
+en2      = input.bool(true, "Enable 2 AM Session", group=g2)
+sess2r   = input.session("0112-0213", "Range Window",         group=g2, tooltip="1:12–2:13 AM NY. Matches DTR indicator.")
+sessBrk2 = input.session("0213-0400", "Break / Entry Window", group=g2, tooltip="2:13–4:00 AM NY. Break detection + entries.")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 3 — 9 AM SESSION (Pre-NY)  [session strings in America/New_York]
+// ═══════════════════════════════════════════════════════════════════════════
+g3       = "3. 9 AM Session (Pre-NY)"
+en9      = input.bool(true, "Enable 9 AM Session", group=g3)
+sess9r   = input.session("0812-0913", "Range Window",         group=g3, tooltip="8:12–9:13 AM NY. Matches DTR indicator.")
+sessBrk9 = input.session("0913-1200", "Break / Entry Window", group=g3, tooltip="9:13–12:00 PM NY.")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 3B — ENTRY SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════
+g3b         = "3b. Entry Settings"
+fvgSizeMult = input.float(1.5, "Bias Candle Size (ATR×)", group=g3b, minval=0.5, step=0.5,
+     tooltip="Bias candle body must be >= this × ATR(14). Higher = only take the strongest impulse candles.")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 4 — STOP LOSS
+// ═══════════════════════════════════════════════════════════════════════════
+g4     = "4. Stop Loss"
+slMult = input.float(0.0, "ATR(14) Buffer Multiplier", group=g4, minval=0.0, maxval=3.0, step=0.1,
+     tooltip="SL = bias candle far-side ± ATR(14) × this value. Default 0 = exact bias candle extreme.")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 5 — TAKE PROFIT
+// ═══════════════════════════════════════════════════════════════════════════
+g5     = "5. Take Profit"
+tpMode = input.string("Range Target", "TP Mode", options=["Fixed R:R", "Range Target"], group=g5,
+     tooltip="Range Target = TP at opposing range end (Rauf's method). Fixed R:R = multiples of risk.")
+tp1r   = input.float(1.0, "TP1 R:R (Fixed mode)", group=g5, minval=0.5, step=0.5)
+tp2r   = input.float(2.0, "TP2 R:R (Fixed mode)", group=g5, minval=1.0, step=0.5)
+tp3r   = input.float(3.0, "TP3 R:R (Fixed mode)", group=g5, minval=1.5, step=0.5)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 6 — DAILY LIMITS
+// ═══════════════════════════════════════════════════════════════════════════
+g6         = "6. Daily Limits"
+maxTrades  = input.int(4,       "Max Trades/Day",               group=g6, minval=1, maxval=20)
+maxLossDir = input.int(2,       "Max Losses Per Direction/Day", group=g6, minval=1, maxval=5,
+     tooltip="Stop trading a direction after this many losses.")
+lossLim    = input.float(300.0, "Daily Loss Limit ($)",         group=g6, minval=0.0)
+profitTgt  = input.float(1000.0,"Daily Profit Target ($)",      group=g6, minval=0.0)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 7 — DAY FILTERS
+// ═══════════════════════════════════════════════════════════════════════════
+g7    = "7. Day of Week Filters"
+dMon  = input.bool(true, "Monday",    group=g7)
+dTue  = input.bool(true, "Tuesday",   group=g7)
+dWed  = input.bool(true, "Wednesday", group=g7)
+dThu  = input.bool(true, "Thursday",  group=g7)
+dFri  = input.bool(true, "Friday",    group=g7)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP 8 — VISUALS
+// ═══════════════════════════════════════════════════════════════════════════
+g8         = "8. Visuals"
+showRng    = input.bool(true,  "Show Range Boxes",    group=g8)
+showIFVG   = input.bool(true,  "Show Setup Labels",   group=g8)
+showLevels = input.bool(true,  "Show SL/TP Lines",    group=g8)
+showDash   = input.bool(true,  "Show Dashboard",      group=g8)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GLOBAL CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+atr14 = ta.atr(14)
+
+[pdh, pdl, pdc] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
+
+// ─── Session detection ───────────────────────────────────────────────────
+// 2 AM sessions
+t2r    = time(timeframe.period, sess2r   + ":1234567", TZ)
+tBrk2  = time(timeframe.period, sessBrk2 + ":1234567", TZ)
+in2r   = not na(t2r)
+is2Fst = in2r and not in2r[1]
+inBrk2 = not na(tBrk2)
+end2Win = inBrk2[1] and not inBrk2
+
+// 9 AM sessions
+t9r    = time(timeframe.period, sess9r   + ":1234567", TZ)
+tBrk9  = time(timeframe.period, sessBrk9 + ":1234567", TZ)
+in9r   = not na(t9r)
+is9Fst = in9r and not in9r[1]
+inBrk9 = not na(tBrk9)
+end9Win = inBrk9[1] and not inBrk9
+
+// RBS BOS gate — tied to user's break window (sessBrk2 / sessBrk9)
+// BOS can only fire while inBrk2 / inBrk9 is active, giving user full control via session inputs
+inRbs2 = inBrk2
+inRbs9 = inBrk9
+
+// Day-of-week
+dow        = dayofweek(time, TZ)
+dayAllowed = (dow == dayofweek.monday and dMon) or (dow == dayofweek.tuesday and dTue) or (dow == dayofweek.wednesday and dWed) or (dow == dayofweek.thursday and dThu) or (dow == dayofweek.friday and dFri)
+isNewDay   = ta.change(time("D")) != 0
+
+// Bias candle conditions (single big candle, body >= ATR multiple)
+bigBearCandle = close < open and math.abs(open - close) >= fvgSizeMult * atr14
+bigBullCandle = close > open and math.abs(close - open) >= fvgSizeMult * atr14
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PERSISTENT STATE — ALL var AT GLOBAL SCOPE
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Daily tracking
+var int   tdyCnt     = 0
+var float dayStartEq = na
+var bool  limHit     = false
+var bool  tgtHit     = false
+var int   lngLosses  = 0
+var int   shtLosses  = 0
+
+// Trade tracking
+var string actSess   = ""
+var float  entryPx   = na
+var float  slLvl     = na
+var float  tp1Lvl    = na
+var float  tp2Lvl    = na
+var float  tp3Lvl    = na
+var bool   isLong    = false
+var float  prevPos   = 0.0
+var int    tpStg     = 0
+var line   slLn      = na
+var line   tp1Ln     = na
+var line   tp2Ln     = na
+var line   tp3Ln     = na
+var label  entryLbl  = na
+var label  slLbl     = na
+var label  tp1Lbl    = na
+var label  tp2Lbl    = na
+var label  tp3Lbl    = na
+
+// 2 AM range
+var float  r2H       = na
+var float  r2L       = na
+var int    r2Bar     = na
+var box    r2Box     = na
+
+// 2 AM break
+var bool   brDone2   = false
+var bool   bearBrk2  = false
+var bool   bullBrk2  = false
+var bool   inv2      = false
+
+// 9 AM range
+var float  r9H       = na
+var float  r9L       = na
+var int    r9Bar     = na
+var box    r9Box     = na
+
+// 9 AM break
+var bool   brDone9   = false
+var bool   bearBrk9  = false
+var bool   bullBrk9  = false
+var bool   inv9      = false
+
+// ── RBS 2AM SHORT state machine ──────────────────────────────────────────────
+// Stage 0=idle, 1=swept(close>r2H), 2=bias_candle, 3=retested
+var int   rbs2sStg    = 0
+var int   rbs2sSweepBr = na
+var float rbs2sBcH    = na    // bias candle high  → SL source
+var float rbs2sBcL    = na    // bias candle low   → BOS level
+var float rbs2sBcBT   = na    // body top  (bearish: open)
+var float rbs2sBcBB   = na    // body bottom (bearish: close)
+var bool  rbs2sPend   = false // BOS confirmed, entry pending next bar
+
+// ── RBS 2AM LONG state machine ────────────────────────────────────────────────
+var int   rbl2lStg    = 0
+var int   rbl2lSweepBr = na
+var float rbl2lBcH    = na    // bias candle high  → BOS level
+var float rbl2lBcL    = na    // bias candle low   → SL source
+var float rbl2lBcBT   = na    // body top  (bullish: close)
+var float rbl2lBcBB   = na    // body bottom (bullish: open)
+var bool  rbl2lPend   = false
+
+// ── RBS 9AM SHORT state machine ──────────────────────────────────────────────
+var int   rbs9sStg    = 0
+var int   rbs9sSweepBr = na
+var float rbs9sBcH    = na
+var float rbs9sBcL    = na
+var float rbs9sBcBT   = na
+var float rbs9sBcBB   = na
+var bool  rbs9sPend   = false
+
+// ── RBS 9AM LONG state machine ────────────────────────────────────────────────
+var int   rbl9lStg    = 0
+var int   rbl9lSweepBr = na
+var float rbl9lBcH    = na
+var float rbl9lBcL    = na
+var float rbl9lBcBT   = na
+var float rbl9lBcBB   = na
+var bool  rbl9lPend   = false
+
+// Active SL sources (set when BOS fires, used in entry block)
+var float rbsSlH = na   // bias candle high → SL for shorts
+var float rbsSlL = na   // bias candle low  → SL for longs
+
+// Dashboard
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 65), border_width=1, border_color=color.new(color.gray, 40), frame_width=1, frame_color=color.new(color.gray, 20))
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DAILY RESET
+// ═══════════════════════════════════════════════════════════════════════════
+if isNewDay
+    tdyCnt     := 0
+    dayStartEq := strategy.equity
+    limHit     := false
+    tgtHit     := false
+    lngLosses  := 0
+    shtLosses  := 0
+
+dailyPnL = strategy.equity - nz(dayStartEq, strategy.equity)
+limHit   := dailyPnL <= -lossLim
+tgtHit   := dailyPnL >= profitTgt
+canTradeBase = dayAllowed and not limHit and not tgtHit and tdyCnt < maxTrades and strategy.position_size == 0.0
+canLong      = canTradeBase and lngLosses < maxLossDir
+canShort     = canTradeBase and shtLosses < maxLossDir
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2 AM SESSION LOGIC
+// ═══════════════════════════════════════════════════════════════════════════
+
+if is2Fst
+    r2H       := high
+    r2L       := low
+    r2Bar     := bar_index
+    brDone2   := false
+    bearBrk2  := false
+    bullBrk2  := false
+    inv2      := false
+    rbs2sStg  := 0
+    rbs2sSweepBr := na
+    rbs2sBcH  := na
+    rbs2sBcL  := na
+    rbs2sBcBT := na
+    rbs2sBcBB := na
+    rbs2sPend := false
+    rbl2lStg  := 0
+    rbl2lSweepBr := na
+    rbl2lBcH  := na
+    rbl2lBcL  := na
+    rbl2lBcBT := na
+    rbl2lBcBB := na
+    rbl2lPend := false
+    if showRng
+        r2Box := box.new(bar_index, high, bar_index, low, border_color=color.rgb(34,139,34), border_width=2, bgcolor=color.new(color.green, 92))
+
+if in2r
+    r2H := math.max(r2H, high)
+    r2L := math.min(r2L, low)
+    if showRng and not na(r2Box)
+        box.set_top(r2Box, r2H)
+        box.set_bottom(r2Box, r2L)
+        box.set_right(r2Box, bar_index)
+
+// Break detection (first wick outside range — sets bias label)
+if inBrk2 and not brDone2 and not na(r2L) and not na(r2H) and en2
+    if low < r2L
+        bearBrk2 := true
+        brDone2  := true
+        label.new(bar_index, low, "▼ 2AM BREAK\nLONG BIAS", style=label.style_label_up, color=color.yellow, textcolor=color.black, size=size.small)
+    else if high > r2H
+        bullBrk2 := true
+        brDone2  := true
+        label.new(bar_index, high, "▲ 2AM BREAK\nSHORT BIAS", style=label.style_label_down, color=color.yellow, textcolor=color.black, size=size.small)
+
+// Invalidation
+if inBrk2 and brDone2 and not inv2
+    if bullBrk2 and low <= r2L
+        inv2 := true
+    if bearBrk2 and high >= r2H
+        inv2 := true
+
+// ── RBS 2AM SHORT state machine ──────────────────────────────────────────────
+if inBrk2 and en2 and not na(r2H)
+    // Stage 0 → 1: sweep — candle CLOSES above range high
+    if rbs2sStg == 0
+        if close > r2H
+            rbs2sStg     := 1
+            rbs2sSweepBr := bar_index
+    // Stage 1 → 2: first bigBearCandle that appears after sweep (any bar, no next-bar constraint)
+    else if rbs2sStg == 1
+        if bigBearCandle
+            rbs2sStg  := 2
+            rbs2sBcH  := high
+            rbs2sBcL  := low
+            rbs2sBcBT := open
+            rbs2sBcBB := close
+            if showIFVG
+                label.new(bar_index, high * 1.0001, "▼ 2AM BIAS", style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
+    // Stage 2: retest — candle wicks into bias body
+    // If same candle also closes below body bottom → immediate BOS (skip stage 3)
+    else if rbs2sStg == 2
+        if high >= rbs2sBcBB and not na(rbs2sBcBB)
+            if close < rbs2sBcBB and inRbs2
+                rbs2sPend := true
+                rbsSlH    := rbs2sBcH
+                rbs2sStg  := 0
+                if showIFVG
+                    label.new(bar_index, high * 1.0001, "↩+BOS\n2AM SHORT", style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
+            else
+                rbs2sStg := 3
+                if showIFVG
+                    label.new(bar_index, high, "↩ RETEST", style=label.style_label_down, color=color.new(color.purple, 30), textcolor=color.white, size=size.tiny)
+    // Stage 3 → pending: BOS — close below bias candle BODY BOTTOM (not wick), after 3:12 AM
+    // Stage 3 → invalidated: close above bias candle high → reset to stage 1, look for new bias candle
+    else if rbs2sStg == 3
+        if close < rbs2sBcBB and not na(rbs2sBcBB) and inRbs2
+            rbs2sPend := true
+            rbsSlH    := rbs2sBcH
+            rbs2sStg  := 0
+            if showIFVG
+                label.new(bar_index, high * 1.0001, "✓ BOS\n2AM SHORT", style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
+        else if close > rbs2sBcH and not na(rbs2sBcH)
+            rbs2sStg  := 1
+            rbs2sBcH  := na
+            rbs2sBcL  := na
+            rbs2sBcBT := na
+            rbs2sBcBB := na
+            if showIFVG
+                label.new(bar_index, high, "✗ RESET\n2AM S", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.tiny)
+
+// ── RBS 2AM LONG state machine ────────────────────────────────────────────────
+if inBrk2 and en2 and not na(r2L)
+    // Stage 0 → 1: sweep — candle CLOSES below range low
+    if rbl2lStg == 0
+        if close < r2L
+            rbl2lStg     := 1
+            rbl2lSweepBr := bar_index
+    // Stage 1 → 2: first bigBullCandle that appears after sweep (any bar, no next-bar constraint)
+    else if rbl2lStg == 1
+        if bigBullCandle
+            rbl2lStg  := 2
+            rbl2lBcH  := high
+            rbl2lBcL  := low
+            rbl2lBcBT := close
+            rbl2lBcBB := open
+            if showIFVG
+                label.new(bar_index, low * 0.9999, "▲ 2AM BIAS", style=label.style_label_up, color=color.purple, textcolor=color.white, size=size.small)
+    // Stage 2: retest — candle wicks into bias body
+    // If same candle also closes above body top → immediate BOS (skip stage 3)
+    else if rbl2lStg == 2
+        if low <= rbl2lBcBT and not na(rbl2lBcBT)
+            if close > rbl2lBcBT and inRbs2
+                rbl2lPend := true
+                rbsSlL    := rbl2lBcL
+                rbl2lStg  := 0
+                if showIFVG
+                    label.new(bar_index, low * 0.9999, "↩+BOS\n2AM LONG", style=label.style_label_up, color=color.purple, textcolor=color.white, size=size.small)
+            else
+                rbl2lStg := 3
+                if showIFVG
+                    label.new(bar_index, low, "↩ RETEST", style=label.style_label_up, color=color.new(color.purple, 30), textcolor=color.white, size=size.tiny)
+    // Stage 3 → pending: BOS — close above bias candle BODY TOP (not wick), after 3:12 AM
+    // Stage 3 → invalidated: close below bias candle low → reset to stage 1, look for new bias candle
+    else if rbl2lStg == 3
+        if close > rbl2lBcBT and not na(rbl2lBcBT) and inRbs2
+            rbl2lPend := true
+            rbsSlL    := rbl2lBcL
+            rbl2lStg  := 0
+            if showIFVG
+                label.new(bar_index, low * 0.9999, "✓ BOS\n2AM LONG", style=label.style_label_up, color=color.purple, textcolor=color.white, size=size.small)
+        else if close < rbl2lBcL and not na(rbl2lBcL)
+            rbl2lStg  := 1
+            rbl2lBcH  := na
+            rbl2lBcL  := na
+            rbl2lBcBT := na
+            rbl2lBcBB := na
+            if showIFVG
+                label.new(bar_index, low, "✗ RESET\n2AM L", style=label.style_label_up, color=color.red, textcolor=color.white, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 9 AM SESSION LOGIC
+// ═══════════════════════════════════════════════════════════════════════════
+
+if is9Fst
+    r9H       := high
+    r9L       := low
+    r9Bar     := bar_index
+    brDone9   := false
+    bearBrk9  := false
+    bullBrk9  := false
+    inv9      := false
+    rbs9sStg  := 0
+    rbs9sSweepBr := na
+    rbs9sBcH  := na
+    rbs9sBcL  := na
+    rbs9sBcBT := na
+    rbs9sBcBB := na
+    rbs9sPend := false
+    rbl9lStg  := 0
+    rbl9lSweepBr := na
+    rbl9lBcH  := na
+    rbl9lBcL  := na
+    rbl9lBcBT := na
+    rbl9lBcBB := na
+    rbl9lPend := false
+    if showRng
+        r9Box := box.new(bar_index, high, bar_index, low, border_color=color.rgb(0,160,80), border_width=2, bgcolor=color.new(color.rgb(0,160,80), 92))
+
+if in9r
+    r9H := math.max(r9H, high)
+    r9L := math.min(r9L, low)
+    if showRng and not na(r9Box)
+        box.set_top(r9Box, r9H)
+        box.set_bottom(r9Box, r9L)
+        box.set_right(r9Box, bar_index)
+
+if inBrk9 and not brDone9 and not na(r9L) and not na(r9H) and en9
+    if low < r9L
+        bearBrk9 := true
+        brDone9  := true
+        label.new(bar_index, low, "▼ 9AM BREAK\nLONG BIAS", style=label.style_label_up, color=color.orange, textcolor=color.black, size=size.small)
+    else if high > r9H
+        bullBrk9 := true
+        brDone9  := true
+        label.new(bar_index, high, "▲ 9AM BREAK\nSHORT BIAS", style=label.style_label_down, color=color.orange, textcolor=color.black, size=size.small)
+
+if inBrk9 and brDone9 and not inv9
+    if bullBrk9 and low <= r9L
+        inv9 := true
+    if bearBrk9 and high >= r9H
+        inv9 := true
+
+// ── RBS 9AM SHORT state machine ──────────────────────────────────────────────
+if inBrk9 and en9 and not na(r9H)
+    if rbs9sStg == 0
+        if close > r9H
+            rbs9sStg     := 1
+            rbs9sSweepBr := bar_index
+    else if rbs9sStg == 1
+        if bigBearCandle
+            rbs9sStg  := 2
+            rbs9sBcH  := high
+            rbs9sBcL  := low
+            rbs9sBcBT := open
+            rbs9sBcBB := close
+            if showIFVG
+                label.new(bar_index, high * 1.0001, "▼ 9AM BIAS", style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
+    else if rbs9sStg == 2
+        if high >= rbs9sBcBB and not na(rbs9sBcBB)
+            if close < rbs9sBcBB and inRbs9
+                rbs9sPend := true
+                rbsSlH    := rbs9sBcH
+                rbs9sStg  := 0
+                if showIFVG
+                    label.new(bar_index, high * 1.0001, "↩+BOS\n9AM SHORT", style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
+            else
+                rbs9sStg := 3
+                if showIFVG
+                    label.new(bar_index, high, "↩ RETEST", style=label.style_label_down, color=color.new(color.purple, 30), textcolor=color.white, size=size.tiny)
+    else if rbs9sStg == 3
+        if close < rbs9sBcBB and not na(rbs9sBcBB) and inRbs9
+            rbs9sPend := true
+            rbsSlH    := rbs9sBcH
+            rbs9sStg  := 0
+            if showIFVG
+                label.new(bar_index, high * 1.0001, "✓ BOS\n9AM SHORT", style=label.style_label_down, color=color.purple, textcolor=color.white, size=size.small)
+        else if close > rbs9sBcH and not na(rbs9sBcH)
+            rbs9sStg  := 1
+            rbs9sBcH  := na
+            rbs9sBcL  := na
+            rbs9sBcBT := na
+            rbs9sBcBB := na
+            if showIFVG
+                label.new(bar_index, high, "✗ RESET\n9AM S", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.tiny)
+
+// ── RBS 9AM LONG state machine ────────────────────────────────────────────────
+if inBrk9 and en9 and not na(r9L)
+    if rbl9lStg == 0
+        if close < r9L
+            rbl9lStg     := 1
+            rbl9lSweepBr := bar_index
+    else if rbl9lStg == 1
+        if bigBullCandle
+            rbl9lStg  := 2
+            rbl9lBcH  := high
+            rbl9lBcL  := low
+            rbl9lBcBT := close
+            rbl9lBcBB := open
+            if showIFVG
+                label.new(bar_index, low * 0.9999, "▲ 9AM BIAS", style=label.style_label_up, color=color.purple, textcolor=color.white, size=size.small)
+    else if rbl9lStg == 2
+        if low <= rbl9lBcBT and not na(rbl9lBcBT)
+            if close > rbl9lBcBT and inRbs9
+                rbl9lPend := true
+                rbsSlL    := rbl9lBcL
+                rbl9lStg  := 0
+                if showIFVG
+                    label.new(bar_index, low * 0.9999, "↩+BOS\n9AM LONG", style=label.style_label_up, color=color.purple, textcolor=color.white, size=size.small)
+            else
+                rbl9lStg := 3
+                if showIFVG
+                    label.new(bar_index, low, "↩ RETEST", style=label.style_label_up, color=color.new(color.purple, 30), textcolor=color.white, size=size.tiny)
+    else if rbl9lStg == 3
+        if close > rbl9lBcBT and not na(rbl9lBcBT) and inRbs9
+            rbl9lPend := true
+            rbsSlL    := rbl9lBcL
+            rbl9lStg  := 0
+            if showIFVG
+                label.new(bar_index, low * 0.9999, "✓ BOS\n9AM LONG", style=label.style_label_up, color=color.purple, textcolor=color.white, size=size.small)
+        else if close < rbl9lBcL and not na(rbl9lBcL)
+            rbl9lStg  := 1
+            rbl9lBcH  := na
+            rbl9lBcL  := na
+            rbl9lBcBT := na
+            rbl9lBcBB := na
+            if showIFVG
+                label.new(bar_index, low, "✗ RESET\n9AM L", style=label.style_label_up, color=color.red, textcolor=color.white, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY SIGNALS — edge-detect: fires on the ONE bar BOS pending is set
+// ═══════════════════════════════════════════════════════════════════════════
+enter2S = en2 and canShort and rbs2sPend and not rbs2sPend[1]
+enter2L = en2 and canLong  and rbl2lPend and not rbl2lPend[1]
+enter9S = en9 and canShort and rbs9sPend and not rbs9sPend[1]
+enter9L = en9 and canLong  and rbl9lPend and not rbl9lPend[1]
+
+enterLong  = enter2L or enter9L
+enterShort = enter2S or enter9S
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRE-COMPUTE ALERT STRINGS (before if blocks — Pine v5 rule)
+// ═══════════════════════════════════════════════════════════════════════════
+_tp3_qty = math.max(qty - tp1_qty - tp2_qty, 1)
+_qs  = str.tostring(qty)
+_t1s = str.tostring(tp1_qty)
+_t2s = str.tostring(tp2_qty)
+_t3s = str.tostring(_tp3_qty)
+
+_a_el  = "{\"contract\":\"" + cn + "\",\"side\":\"buy\",\"size\":"  + _qs  + ",\"order_type\":\"market\",\"comment\":\"entry_long\"}"
+_a_es  = "{\"contract\":\"" + cn + "\",\"side\":\"sell\",\"size\":" + _qs  + ",\"order_type\":\"market\",\"comment\":\"entry_short\"}"
+_a_t1l = "{\"contract\":\"" + cn + "\",\"side\":\"sell\",\"size\":" + _t1s + ",\"order_type\":\"market\",\"comment\":\"TP1\"}"
+_a_t2l = "{\"contract\":\"" + cn + "\",\"side\":\"sell\",\"size\":" + _t2s + ",\"order_type\":\"market\",\"comment\":\"TP2\"}"
+_a_t3l = "{\"contract\":\"" + cn + "\",\"side\":\"sell\",\"size\":" + _t3s + ",\"order_type\":\"market\",\"comment\":\"TP3\"}"
+_a_sll = "{\"contract\":\"" + cn + "\",\"side\":\"sell\",\"size\":" + _qs  + ",\"order_type\":\"market\",\"comment\":\"SL\"}"
+_a_t1s = "{\"contract\":\"" + cn + "\",\"side\":\"buy\",\"size\":"  + _t1s + ",\"order_type\":\"market\",\"comment\":\"TP1\"}"
+_a_t2s = "{\"contract\":\"" + cn + "\",\"side\":\"buy\",\"size\":"  + _t2s + ",\"order_type\":\"market\",\"comment\":\"TP2\"}"
+_a_t3s = "{\"contract\":\"" + cn + "\",\"side\":\"buy\",\"size\":"  + _t3s + ",\"order_type\":\"market\",\"comment\":\"TP3\"}"
+_a_sls = "{\"contract\":\"" + cn + "\",\"side\":\"buy\",\"size\":"  + _qs  + ",\"order_type\":\"market\",\"comment\":\"SL\"}"
+_a_tpl = "{\"contract\":\"" + cn + "\",\"side\":\"sell\",\"size\":" + _qs  + ",\"order_type\":\"market\",\"comment\":\"TP_range\"}"
+_a_tps = "{\"contract\":\"" + cn + "\",\"side\":\"buy\",\"size\":"  + _qs  + ",\"order_type\":\"market\",\"comment\":\"TP_range\"}"
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY — LONG
+// SL = bias candle low − ATR buffer
+// TP = range high (Range Target) or Fixed R:R
+// ═══════════════════════════════════════════════════════════════════════════
+if enterLong
+    _sl_level = nz(rbsSlL, low) - atr14 * slMult
+    _risk_pts = close - _sl_level
+    if _risk_pts > 0.0
+        _rangeTP  = enter2L ? nz(r2H, close + _risk_pts * tp3r) : nz(r9H, close + _risk_pts * tp3r)
+        _useRange = tpMode == "Range Target" and _rangeTP > close
+        _tp1_l = _useRange ? _rangeTP : close + _risk_pts * tp1r
+        _tp2_l = _useRange ? _rangeTP : close + _risk_pts * tp2r
+        _tp3_l = _useRange ? _rangeTP : close + _risk_pts * tp3r
+        entryPx := close
+        slLvl   := _sl_level
+        tp1Lvl  := _tp1_l
+        tp2Lvl  := _tp2_l
+        tp3Lvl  := _tp3_l
+        isLong  := true
+        tdyCnt  := tdyCnt + 1
+        actSess := enter2L ? "2AM LONG" : "9AM LONG"
+        rbl2lPend := false
+        rbl9lPend := false
+        strategy.entry("Lng", strategy.long, qty=qty, comment=actSess)
+        alert(_a_el, alert.freq_once_per_bar)
+        if _useRange
+            tpStg := 0
+            strategy.exit("TPL", from_entry="Lng", qty=qty, limit=_rangeTP, stop=_sl_level, alert_profit=_a_tpl, alert_loss=_a_sll)
+        else
+            tpStg := 1
+            strategy.exit("TP1L", from_entry="Lng", qty=tp1_qty, limit=_tp1_l, stop=_sl_level, alert_profit=_a_t1l, alert_loss=_a_sll)
+            strategy.exit("TP2L", from_entry="Lng", qty=tp2_qty, limit=_tp2_l, stop=_sl_level, alert_profit=_a_t2l, alert_loss=_a_sll)
+            strategy.exit("TP3L", from_entry="Lng", qty=_tp3_qty, limit=_tp3_l, stop=_sl_level, alert_profit=_a_t3l, alert_loss=_a_sll)
+        if showLevels
+            if not na(slLn)
+                line.delete(slLn)
+            if not na(tp1Ln)
+                line.delete(tp1Ln)
+            if not na(tp2Ln)
+                line.delete(tp2Ln)
+            if not na(tp3Ln)
+                line.delete(tp3Ln)
+            slLn  := line.new(bar_index, _sl_level, bar_index + 70, _sl_level, color=color.red, width=2, style=line.style_dashed)
+            tp1Ln := line.new(bar_index, _tp1_l, bar_index + 70, _tp1_l, color=color.lime, width=2)
+            if not _useRange
+                tp2Ln := line.new(bar_index, _tp2_l, bar_index + 70, _tp2_l, color=color.new(color.lime, 20), width=1)
+                tp3Ln := line.new(bar_index, _tp3_l, bar_index + 70, _tp3_l, color=color.lime, width=2)
+            if not na(entryLbl)
+                label.delete(entryLbl)
+            if not na(slLbl)
+                label.delete(slLbl)
+            if not na(tp1Lbl)
+                label.delete(tp1Lbl)
+            if not na(tp2Lbl)
+                label.delete(tp2Lbl)
+            if not na(tp3Lbl)
+                label.delete(tp3Lbl)
+            entryLbl := label.new(bar_index, close, "▲ LONG  " + actSess + "\nEntry: " + str.tostring(math.round(close, 1)) + "  SL: " + str.tostring(math.round(_sl_level, 1)), style=label.style_label_down, color=color.teal, textcolor=color.white, size=size.small)
+            slLbl    := label.new(bar_index + 71, _sl_level, "SL " + str.tostring(math.round(_sl_level, 1)), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.red, size=size.tiny)
+            tp1Lbl   := label.new(bar_index + 71, _tp1_l, (_useRange ? "TP " : "TP1 ") + str.tostring(math.round(_tp1_l, 1)), style=label.style_label_left, color=color.new(color.lime, 20), textcolor=color.lime, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENTRY — SHORT
+// SL = bias candle high + ATR buffer
+// TP = range low (Range Target) or Fixed R:R
+// ═══════════════════════════════════════════════════════════════════════════
+if enterShort
+    _sl_level = nz(rbsSlH, high) + atr14 * slMult
+    _risk_pts = _sl_level - close
+    if _risk_pts > 0.0
+        _rangeTP  = enter2S ? nz(r2L, close - _risk_pts * tp3r) : nz(r9L, close - _risk_pts * tp3r)
+        _useRange = tpMode == "Range Target" and _rangeTP < close
+        _tp1_s = _useRange ? _rangeTP : close - _risk_pts * tp1r
+        _tp2_s = _useRange ? _rangeTP : close - _risk_pts * tp2r
+        _tp3_s = _useRange ? _rangeTP : close - _risk_pts * tp3r
+        entryPx := close
+        slLvl   := _sl_level
+        tp1Lvl  := _tp1_s
+        tp2Lvl  := _tp2_s
+        tp3Lvl  := _tp3_s
+        isLong  := false
+        tdyCnt  := tdyCnt + 1
+        actSess := enter2S ? "2AM SHORT" : "9AM SHORT"
+        rbs2sPend := false
+        rbs9sPend := false
+        strategy.entry("Sht", strategy.short, qty=qty, comment=actSess)
+        alert(_a_es, alert.freq_once_per_bar)
+        if _useRange
+            tpStg := 0
+            strategy.exit("TPS", from_entry="Sht", qty=qty, limit=_rangeTP, stop=_sl_level, alert_profit=_a_tps, alert_loss=_a_sls)
+        else
+            tpStg := 1
+            strategy.exit("TP1S", from_entry="Sht", qty=tp1_qty, limit=_tp1_s, stop=_sl_level, alert_profit=_a_t1s, alert_loss=_a_sls)
+            strategy.exit("TP2S", from_entry="Sht", qty=tp2_qty, limit=_tp2_s, stop=_sl_level, alert_profit=_a_t2s, alert_loss=_a_sls)
+            strategy.exit("TP3S", from_entry="Sht", qty=_tp3_qty, limit=_tp3_s, stop=_sl_level, alert_profit=_a_t3s, alert_loss=_a_sls)
+        if showLevels
+            if not na(slLn)
+                line.delete(slLn)
+            if not na(tp1Ln)
+                line.delete(tp1Ln)
+            if not na(tp2Ln)
+                line.delete(tp2Ln)
+            if not na(tp3Ln)
+                line.delete(tp3Ln)
+            slLn  := line.new(bar_index, _sl_level, bar_index + 70, _sl_level, color=color.red, width=2, style=line.style_dashed)
+            tp1Ln := line.new(bar_index, _tp1_s, bar_index + 70, _tp1_s, color=color.lime, width=2)
+            if not _useRange
+                tp2Ln := line.new(bar_index, _tp2_s, bar_index + 70, _tp2_s, color=color.new(color.lime, 20), width=1)
+                tp3Ln := line.new(bar_index, _tp3_s, bar_index + 70, _tp3_s, color=color.lime, width=2)
+            if not na(entryLbl)
+                label.delete(entryLbl)
+            if not na(slLbl)
+                label.delete(slLbl)
+            if not na(tp1Lbl)
+                label.delete(tp1Lbl)
+            if not na(tp2Lbl)
+                label.delete(tp2Lbl)
+            if not na(tp3Lbl)
+                label.delete(tp3Lbl)
+            entryLbl := label.new(bar_index, close, "▼ SHORT  " + actSess + "\nEntry: " + str.tostring(math.round(close, 1)) + "  SL: " + str.tostring(math.round(_sl_level, 1)), style=label.style_label_up, color=color.red, textcolor=color.white, size=size.small)
+            slLbl    := label.new(bar_index + 71, _sl_level, "SL " + str.tostring(math.round(_sl_level, 1)), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.red, size=size.tiny)
+            tp1Lbl   := label.new(bar_index + 71, _tp1_s, (_useRange ? "TP " : "TP1 ") + str.tostring(math.round(_tp1_s, 1)), style=label.style_label_left, color=color.new(color.lime, 20), textcolor=color.lime, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DYNAMIC SL TRAIL — move SL to BE after TP1, to TP1 after TP2
+// ═══════════════════════════════════════════════════════════════════════════
+curPos     = math.abs(strategy.position_size)
+posReduced = curPos < math.abs(prevPos) and curPos > 0.0 and tpStg >= 1
+
+if posReduced
+    _rem = int(curPos)
+    _rs  = str.tostring(_rem)
+    if isLong
+        if tpStg == 1
+            _newSl = entryPx
+            slLvl  := _newSl
+            tpStg  := 2
+            strategy.cancel("TP2L")
+            strategy.cancel("TP3L")
+            _a_slbe = "{\"contract\":\"" + cn + "\",\"side\":\"sell\",\"size\":" + _rs + ",\"order_type\":\"market\",\"comment\":\"SL_BE\"}"
+            strategy.exit("TP2L", from_entry="Lng", qty=tp2_qty, limit=tp2Lvl, stop=_newSl, alert_profit=_a_t2l, alert_loss=_a_slbe)
+            strategy.exit("TP3L", from_entry="Lng", qty=_tp3_qty, limit=tp3Lvl, stop=_newSl, alert_profit=_a_t3l)
+            if not na(tp1Lbl)
+                label.delete(tp1Lbl)
+            if showLevels and not na(slLn)
+                line.set_y1(slLn, _newSl)
+                line.set_y2(slLn, _newSl)
+            if showLevels and not na(slLbl)
+                label.set_y(slLbl, _newSl)
+                label.set_text(slLbl, "SL(BE) " + str.tostring(math.round(_newSl, 1)))
+        else if tpStg == 2
+            _newSl = tp1Lvl
+            slLvl  := _newSl
+            tpStg  := 3
+            strategy.cancel("TP3L")
+            _a_sltp1 = "{\"contract\":\"" + cn + "\",\"side\":\"sell\",\"size\":" + _rs + ",\"order_type\":\"market\",\"comment\":\"SL_TP1\"}"
+            strategy.exit("TP3L", from_entry="Lng", qty=_rem, limit=tp3Lvl, stop=_newSl, alert_profit=_a_t3l, alert_loss=_a_sltp1)
+            if not na(tp2Lbl)
+                label.delete(tp2Lbl)
+            if showLevels and not na(slLn)
+                line.set_y1(slLn, _newSl)
+                line.set_y2(slLn, _newSl)
+            if showLevels and not na(slLbl)
+                label.set_y(slLbl, _newSl)
+                label.set_text(slLbl, "SL(TP1) " + str.tostring(math.round(_newSl, 1)))
+    else
+        if tpStg == 1
+            _newSl = entryPx
+            slLvl  := _newSl
+            tpStg  := 2
+            strategy.cancel("TP2S")
+            strategy.cancel("TP3S")
+            _a_slbe = "{\"contract\":\"" + cn + "\",\"side\":\"buy\",\"size\":" + _rs + ",\"order_type\":\"market\",\"comment\":\"SL_BE\"}"
+            strategy.exit("TP2S", from_entry="Sht", qty=tp2_qty, limit=tp2Lvl, stop=_newSl, alert_profit=_a_t2s, alert_loss=_a_slbe)
+            strategy.exit("TP3S", from_entry="Sht", qty=_tp3_qty, limit=tp3Lvl, stop=_newSl, alert_profit=_a_t3s)
+            if not na(tp1Lbl)
+                label.delete(tp1Lbl)
+            if showLevels and not na(slLn)
+                line.set_y1(slLn, _newSl)
+                line.set_y2(slLn, _newSl)
+            if showLevels and not na(slLbl)
+                label.set_y(slLbl, _newSl)
+                label.set_text(slLbl, "SL(BE) " + str.tostring(math.round(_newSl, 1)))
+        else if tpStg == 2
+            _newSl = tp1Lvl
+            slLvl  := _newSl
+            tpStg  := 3
+            strategy.cancel("TP3S")
+            _a_sltp1 = "{\"contract\":\"" + cn + "\",\"side\":\"buy\",\"size\":" + _rs + ",\"order_type\":\"market\",\"comment\":\"SL_TP1\"}"
+            strategy.exit("TP3S", from_entry="Sht", qty=_rem, limit=tp3Lvl, stop=_newSl, alert_profit=_a_t3s, alert_loss=_a_sltp1)
+            if not na(tp2Lbl)
+                label.delete(tp2Lbl)
+            if showLevels and not na(slLn)
+                line.set_y1(slLn, _newSl)
+                line.set_y2(slLn, _newSl)
+            if showLevels and not na(slLbl)
+                label.set_y(slLbl, _newSl)
+                label.set_text(slLbl, "SL(TP1) " + str.tostring(math.round(_newSl, 1)))
+
+prevPos := strategy.position_size
+
+// Position closed — track losses + reset visuals
+if strategy.position_size == 0.0 and strategy.position_size[1] != 0.0
+    _wasLoss = (isLong and close < entryPx) or (not isLong and close > entryPx)
+    if _wasLoss and isLong
+        lngLosses := lngLosses + 1
+    if _wasLoss and not isLong
+        shtLosses := shtLosses + 1
+    actSess := ""
+    tpStg   := 0
+    if not na(slLn)
+        line.delete(slLn)
+    if not na(tp1Ln)
+        line.delete(tp1Ln)
+    if not na(tp2Ln)
+        line.delete(tp2Ln)
+    if not na(tp3Ln)
+        line.delete(tp3Ln)
+    if not na(entryLbl)
+        label.delete(entryLbl)
+    if not na(slLbl)
+        label.delete(slLbl)
+    if not na(tp1Lbl)
+        label.delete(tp1Lbl)
+    if not na(tp2Lbl)
+        label.delete(tp2Lbl)
+    if not na(tp3Lbl)
+        label.delete(tp3Lbl)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SESSION FORCE-CLOSE
+// ═══════════════════════════════════════════════════════════════════════════
+if end2Win and strategy.position_size != 0
+    _rem2 = str.tostring(math.abs(int(strategy.position_size)))
+    _sd2  = strategy.position_size > 0 ? "sell" : "buy"
+    _fc2  = "{\"contract\":\"" + cn + "\",\"side\":\"" + _sd2 + "\",\"size\":" + _rem2 + ",\"order_type\":\"market\",\"comment\":\"2AM_close\"}"
+    strategy.close_all(comment="2AM_close", alert_message=_fc2)
+
+if end9Win and strategy.position_size != 0
+    _rem9 = str.tostring(math.abs(int(strategy.position_size)))
+    _sd9  = strategy.position_size > 0 ? "sell" : "buy"
+    _fc9  = "{\"contract\":\"" + cn + "\",\"side\":\"" + _sd9 + "\",\"size\":" + _rem9 + ",\"order_type\":\"market\",\"comment\":\"9AM_close\"}"
+    strategy.close_all(comment="9AM_close", alert_message=_fc9)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════
+if showDash and barstate.islast
+    _pos    = strategy.position_size > 0 ? "▲ LONG" : strategy.position_size < 0 ? "▼ SHORT" : "─ FLAT"
+    _posCol = strategy.position_size > 0 ? color.teal : strategy.position_size < 0 ? color.red : color.gray
+    _pnl    = (dailyPnL >= 0 ? "+" : "") + str.tostring(math.round(dailyPnL, 2))
+    _pnlCol = dailyPnL >= 0 ? color.lime : color.red
+    _lim    = limHit ? "⛔ LOSS HIT" : tgtHit ? "✓ TARGET" : "─ OK"
+    _limCol = limHit ? color.red : tgtHit ? color.lime : color.gray
+    table.cell(dash, 0, 0, "DTR v2",   text_color=color.white,  bgcolor=color.new(color.navy, 30), text_size=size.small)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.silver, bgcolor=color.new(color.navy, 30), text_size=size.small)
+    table.cell(dash, 0, 1, "Session",  text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 1, 1, actSess == "" ? "─" : actSess, text_color=color.white, text_size=size.tiny)
+    table.cell(dash, 0, 2, "Position", text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 1, 2, _pos,       text_color=_posCol,      text_size=size.tiny)
+    table.cell(dash, 0, 3, "Day P&L",  text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 1, 3, _pnl,       text_color=_pnlCol,      text_size=size.tiny)
+    table.cell(dash, 0, 4, "Trades",   text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 1, 4, str.tostring(tdyCnt) + " / " + str.tostring(maxTrades), text_color=color.white, text_size=size.tiny)
+    table.cell(dash, 0, 5, "SL Level", text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 1, 5, na(slLvl) ? "─" : str.tostring(math.round(slLvl, 1)), text_color=color.red, text_size=size.tiny)
+    table.cell(dash, 0, 6, "Limits",   text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 1, 6, _lim,       text_color=_limCol,      text_size=size.tiny)
+    table.cell(dash, 0, 7, "TP Stage", text_color=color.gray,   text_size=size.tiny)
+    table.cell(dash, 1, 7, str.tostring(tpStg), text_color=color.yellow, text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BACKGROUND SHADING
+// ═══════════════════════════════════════════════════════════════════════════
+bgcolor(in2r   ? color.new(color.green, 96) : na, title="2AM Range")
+bgcolor(inBrk2 ? color.new(color.teal,  97) : na, title="2AM Entry Window")
+bgcolor(in9r   ? color.new(color.rgb(0,160,80), 96) : na, title="9AM Range")
+bgcolor(inBrk9 ? color.new(color.blue,  97) : na, title="9AM Entry Window")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REFERENCE LEVELS
+// ═══════════════════════════════════════════════════════════════════════════
+plot(pdh, "PDH", color=color.new(color.red,    70), linewidth=1, style=plot.style_circles)
+plot(pdl, "PDL", color=color.new(color.green,  70), linewidth=1, style=plot.style_circles)
+plot(pdc, "PDC", color=color.new(color.yellow, 70), linewidth=1, style=plot.style_circles)
