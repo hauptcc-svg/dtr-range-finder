@@ -677,7 +677,8 @@ class AgentController {
           tp1Price,
         });
 
-        const isScalp = /scalp/i.test(decision.reasoning ?? "");
+        // Prefer explicit schema field; fall back to keyword heuristic for robustness
+        const isScalp = decision.timeframe === "1m_scalp" || /scalp/i.test(decision.reasoning ?? "");
         const [trade] = await db
           .insert(tradesTable)
           .values({
@@ -712,7 +713,7 @@ class AgentController {
         this.tradeCount++;
 
         logger.info(
-          { symbol: decision.symbol, action: decision.action, price, reasoning: decision.reasoning, isScalp },
+          { symbol: decision.symbol, action: decision.action, price, timeframe: decision.timeframe, isScalp },
           "Claude autonomous: trade placed"
         );
 
@@ -874,7 +875,8 @@ class AgentController {
             tp1Price,
           });
 
-          const isScalp = /scalp/i.test(decision.reasoning ?? "");
+          // Prefer explicit schema field; fall back to keyword heuristic for robustness
+          const isScalp = decision.timeframe === "1m_scalp" || /scalp/i.test(decision.reasoning ?? "");
           const [trade] = await db
             .insert(tradesTable)
             .values({
@@ -909,7 +911,7 @@ class AgentController {
           this.tradeCount++;
 
           tradesPlaced.push(`${decision.symbol} ${decision.action.toUpperCase()}`);
-          logger.info({ symbol: decision.symbol, action: decision.action, isScalp }, "Claude autonomous manual trade placed");
+          logger.info({ symbol: decision.symbol, action: decision.action, timeframe: decision.timeframe, isScalp }, "Claude autonomous manual trade placed");
           this.sendTelegram(
             `🧠 <b>TRADE ENTERED</b> · DeclanCapital FX\n\n` +
             `<b>${config.name ?? decision.symbol}</b> (${decision.symbol})\n` +

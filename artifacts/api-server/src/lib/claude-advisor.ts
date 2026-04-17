@@ -16,6 +16,8 @@ export interface ClaudeTradeDecision {
   symbol: string;
   action: "long" | "short" | "close" | "skip";
   reasoning: string;
+  /** Set to "1m_scalp" when the entry is driven by the 1-min scalp window; defaults to "5m". */
+  timeframe?: "5m" | "1m_scalp";
 }
 
 export interface ClaudeAdvice {
@@ -216,7 +218,8 @@ Rules you must obey:
 3. Never open a new trade if today's trade count is at the max.
 4. Only output "close" for instruments that have an open position.
 5. Only output "long"/"short" for instruments with no open position.
-6. Explain your market logic in the "reasoning" field (2-3 sentences, name the specific pattern/setup you see and the timeframe — 5m or 1m scalp — it comes from).
+6. Explain your market logic in the "reasoning" field (2-3 sentences, name the specific pattern/setup you see).
+7. Set "timeframe" to "1m_scalp" when your entry decision is driven by the 1-minute scalp window; otherwise set it to "5m".
 
 Respond with ONLY this JSON — no markdown, no extra text:
 {
@@ -224,6 +227,7 @@ Respond with ONLY this JSON — no markdown, no extra text:
     {
       "symbol": "SYMBOL",
       "action": "long" | "short" | "close" | "skip",
+      "timeframe": "5m" | "1m_scalp",
       "reasoning": "your market analysis and the specific setup you identified"
     }
   ],
