@@ -1161,7 +1161,7 @@
             </div>
             <div class="pair-field">
                 <label>9AM Session End (HH:MM NY)</label>
-                <input id="pf-session-end" type="text" placeholder="12:00" maxlength="5">
+                <input id="pf-session-end" type="text" placeholder="12:00" maxlength="5" title="DTR: 12:00 (NY open close), ATR: 14:00 (extended)">
             </div>
             <div class="pair-field">
                 <label>Point Value</label>
@@ -1805,7 +1805,7 @@ function openPairModal(pair) {
     document.getElementById('pf-qty').value = pair ? pair.qty : 1;
     document.getElementById('pf-sess2-end').value = pair ? (pair.sess2EntryEnd || '04:00') : '04:00';
     document.getElementById('pf-session-start').value = pair ? pair.sessionStart : '09:13';
-    document.getElementById('pf-session-end').value = pair ? pair.sessionEnd : '14:00';
+    document.getElementById('pf-session-end').value = pair ? pair.sessionEnd : '12:00';
     document.getElementById('pf-point-value').value = pair ? pair.pointValue : 1.0;
     document.getElementById('pf-min-tick').value = pair ? pair.minTick : 0.25;
     document.getElementById('pf-max-trades').value = pair ? pair.maxTradesPerDay : 4;
@@ -1831,7 +1831,7 @@ async function savePair() {
         qty: parseInt(document.getElementById('pf-qty').value, 10) || 1,
         sess2EntryEnd: document.getElementById('pf-sess2-end').value.trim() || '04:00',
         sessionStart: document.getElementById('pf-session-start').value.trim() || '09:13',
-        sessionEnd: document.getElementById('pf-session-end').value.trim() || '14:00',
+        sessionEnd: document.getElementById('pf-session-end').value.trim() || '12:00',
         pointValue: parseFloat(document.getElementById('pf-point-value').value) || 1.0,
         minTick: parseFloat(document.getElementById('pf-min-tick').value) || 0.25,
         maxTradesPerDay: parseInt(document.getElementById('pf-max-trades').value, 10) || 4,

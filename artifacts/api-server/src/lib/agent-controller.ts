@@ -1852,9 +1852,8 @@ class AgentController {
             config.minTick ?? 0.01,
           );
 
-          if (rbsResult.rangeHigh && rbsResult.rangeLow) {
-            state.rangeData = { high: rbsResult.rangeHigh, low: rbsResult.rangeLow, timestamp: new Date().toISOString() };
-          }
+          // Only store the RBS stage snapshots (rbs2/rbs9) — rangeData is set correctly
+          // by processEntryPhase on each tick using the full legacy computeRange path.
           if (session === "london") state.rbs2 = rbsResult;
           else                      state.rbs9 = rbsResult;
 

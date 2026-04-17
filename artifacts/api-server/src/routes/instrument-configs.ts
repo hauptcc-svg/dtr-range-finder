@@ -36,7 +36,7 @@ router.post("/instrument-configs", requireAgentKeyOrSession, async (req: Request
         strategyMode: typeof strategyMode === "string" ? strategyMode : "dtr",
         sess2EntryEnd: typeof sess2EntryEnd === "string" ? sess2EntryEnd : "04:00",
         sessionStart: typeof sessionStart === "string" ? sessionStart : "09:13",
-        sessionEnd: typeof sessionEnd === "string" ? sessionEnd : "14:00",
+        sessionEnd: typeof sessionEnd === "string" ? sessionEnd : "12:00",
         createdAt: new Date(),
         updatedAt: new Date(),
       })
@@ -52,7 +52,7 @@ router.post("/instrument-configs", requireAgentKeyOrSession, async (req: Request
           strategyMode: typeof strategyMode === "string" ? strategyMode : "dtr",
           sess2EntryEnd: typeof sess2EntryEnd === "string" ? sess2EntryEnd : "04:00",
           sessionStart: typeof sessionStart === "string" ? sessionStart : "09:13",
-          sessionEnd: typeof sessionEnd === "string" ? sessionEnd : "14:00",
+          sessionEnd: typeof sessionEnd === "string" ? sessionEnd : "12:00",
           updatedAt: new Date(),
         },
       })
