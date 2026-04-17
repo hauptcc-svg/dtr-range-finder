@@ -236,6 +236,11 @@ Respond with ONLY this JSON — no markdown, no extra text:
 }
 
 // ---------------------------------------------------------------------------
+// Test-only export (prefixed with _ to signal internal use)
+// ---------------------------------------------------------------------------
+export { buildAutonomousPrompt as _buildAutonomousPromptForTest };
+
+// ---------------------------------------------------------------------------
 // Exported functions
 // ---------------------------------------------------------------------------
 
