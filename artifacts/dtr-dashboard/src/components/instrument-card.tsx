@@ -97,6 +97,7 @@ function StageTracker({
       return () => clearTimeout(timer);
     }
     prevActiveStep.current = activeStep;
+    return undefined;
   }, [activeStep]);
 
   return (
