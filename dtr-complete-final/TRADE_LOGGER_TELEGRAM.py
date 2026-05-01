@@ -161,6 +161,89 @@ Time: {datetime.now().strftime('%H:%M:%S')}
         
         return await self.send_message(message)
 
+    async def notify_hermes_digest(
+        self,
+        trades:        List[Dict[str, Any]],
+        contexts:      Dict[str, Any],
+        daily_pnl:     float,
+        param_proposals: List[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Hermes end-of-day digest with golden setups, avoid patterns,
+        and optional inline approve/reject buttons for parameter proposals.
+        """
+        total  = len(trades)
+        wins   = sum(1 for t in trades if t.get("outcome") == "WIN")
+        losses = sum(1 for t in trades if t.get("outcome") == "LOSS")
+        wr     = (wins / total * 100) if total else 0.0
+        pnl_emoji = "🟢" if daily_pnl >= 0 else "🔴"
+
+        # Collect insights across all symbols
+        golden_lines = []
+        avoid_lines  = []
+        for sym, ctx in contexts.items():
+            for g in ctx.get("golden_setups", [])[:2]:
+                golden_lines.append(
+                    f"• {g.get('symbol')} {g.get('session')} {g.get('direction')} "
+                    f"({g.get('win_rate', 0)*100:.0f}% WR, {g.get('sample_size', '?')} trades)"
+                )
+            for a in ctx.get("avoid_patterns", [])[:1]:
+                avoid_lines.append(
+                    f"• {a.get('symbol')} {a.get('session')} {a.get('direction')} "
+                    f"— {a.get('reason', '')}"
+                )
+
+        golden_text = "\n".join(golden_lines[:3]) or "No patterns yet"
+        avoid_text  = "\n".join(avoid_lines[:2])  or "None"
+
+        message = (
+            f"<b>📊 DTR Daily Summary — {date.today().strftime('%d %b %Y')}</b>\n"
+            f"─────────────────────\n"
+            f"Trades: {total} | Wins: {wins} | Losses: {losses} | WR: {wr:.0f}%\n"
+            f"Daily P&amp;L: {pnl_emoji} <b>${daily_pnl:+.2f}</b>\n"
+            f"─────────────────────\n"
+            f"<b>🔮 Hermes Insights:</b>\n"
+            f"<b>Golden setups:</b>\n{golden_text}\n\n"
+            f"<b>Avoid:</b>\n{avoid_text}"
+        )
+
+        await self.send_message(message)
+
+        # Send param proposals as a separate message with inline buttons
+        if param_proposals:
+            for p in param_proposals:
+                param     = p.get("param", "?")
+                current   = p.get("current", "?")
+                suggested = p.get("suggested", "?")
+                symbol    = p.get("symbol", "ALL")
+                reasoning = p.get("reasoning", "")
+
+                proposal_msg = (
+                    f"<b>⚙️ Parameter Proposal — {symbol}</b>\n"
+                    f"<code>{param}</code>: {current} → {suggested}\n"
+                    f"<i>{reasoning}</i>"
+                )
+                inline_keyboard = {"inline_keyboard": [[
+                    {"text": f"✅ Approve", "callback_data": f"APPROVE_{symbol}_{param}_{suggested}"},
+                    {"text": f"❌ Reject",  "callback_data": f"REJECT_{symbol}_{param}"},
+                ]]}
+
+                try:
+                    async with aiohttp.ClientSession() as sess:
+                        await sess.post(
+                            f"{self.api_url}/sendMessage",
+                            json={
+                                "chat_id":      self.chat_id,
+                                "text":         proposal_msg,
+                                "parse_mode":   "HTML",
+                                "reply_markup": inline_keyboard,
+                            }
+                        )
+                except Exception as e:
+                    logger.error(f"❌ Telegram proposal send error: {e}")
+
+        return True
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # COMPREHENSIVE TRADE LOGGER

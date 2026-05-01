@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DTR Platform — Dashboard Preview</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        background: '#0f172a',
+        card: '#1e293b',
+        border: '#334155',
+        primary: '#6366f1',
+        success: '#22c55e',
+        destructive: '#ef4444',
+        muted: '#94a3b8',
+      },
+      fontFamily: { mono: ['JetBrains Mono', 'Fira Code', 'monospace'] }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #0f172a; color: #e2e8f0; font-family: 'JetBrains Mono', monospace; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; }
+  .btn { height: 52px; font-family: monospace; font-weight: 700; font-size: 13px; border-radius: 6px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .btn-active-indigo { background: #4f46e5; color: white; border: 1px solid #6366f1; }
+  .btn-active-ai { background: #4f46e5; color: white; border: 1px solid #6366f1; animation: pulse 2s infinite; }
+  .btn-active-halt { background: #dc2626; color: white; border: 1px solid #ef4444; }
+  .btn-inactive { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+  .btn-inactive:hover { background: #273549; color: #e2e8f0; }
+  .stage-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .stage-active { background: #6366f1; box-shadow: 0 0 6px #6366f1; }
+  .stage-inactive { background: #334155; }
+  .blink { animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.7 } }
+  .pnl-bar { height: 8px; border-radius: 4px; background: #334155; overflow: hidden; }
+  .pnl-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #22c55e, #4ade80); transition: width 0.5s; }
+  .tag { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; }
+  .label { font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+  .value { font-size: 14px; font-weight: 700; font-family: monospace; }
+  .account-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-family: monospace; cursor: pointer; border: 1px solid; transition: all 0.15s; }
+  .account-active { background: rgba(79,70,229,0.15); border-color: rgba(99,102,241,0.5); color: #a5b4fc; }
+  .account-inactive { background: rgba(255,255,255,0.03); border-color: #334155; color: #94a3b8; }
+  .instrument-card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; }
+  .bos-glow { border-color: #6366f1 !important; box-shadow: 0 0 12px rgba(99,102,241,0.3); }
+  .range-bar { height: 6px; background: #334155; border-radius: 3px; position: relative; overflow: hidden; margin: 8px 0; }
+  .range-fill { position: absolute; height: 100%; background: linear-gradient(90deg, #6366f1, #818cf8); border-radius: 3px; }
+  .range-marker { position: absolute; top: -3px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #0f172a; }
+</style>
+</head>
+<body class="p-4 min-h-screen">
+
+<!-- Header -->
+<div class="flex items-center justify-between mb-6 pb-4" style="border-bottom:1px solid #334155">
+  <div class="flex items-center gap-3">
+    <div style="width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 8px #22c55e" class="animate-ping absolute"></div>
+    <div style="width:8px;height:8px;border-radius:50%;background:#22c55e;position:relative"></div>
+    <span style="font-size:11px;color:#94a3b8;letter-spacing:0.1em">ACTIVE</span>
+  </div>
+  <span style="font-size:11px;color:#64748b;letter-spacing:0.05em">DecanatorFX AI Platform v1.0</span>
+  <span style="font-size:11px;color:#64748b">05:47 NY</span>
+</div>
+
+<div class="grid gap-4" style="max-width:1200px;margin:0 auto">
+
+  <!-- Row 1: Control + Accounts + PnL -->
+  <div class="grid gap-4" style="grid-template-columns: 300px 220px 1fr">
+
+    <!-- System Status / Mode Control -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-4 pb-3" style="border-bottom:1px solid #334155">
+        <div class="flex items-center gap-2">
+          <svg width="16" height="16" fill="none" stroke="#6366f1" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+          <span style="font-size:12px;font-weight:700;letter-spacing:0.1em;color:#94a3b8">SYSTEM STATUS</span>
+        </div>
+        <span class="tag" style="background:rgba(34,197,94,0.15);color:#22c55e">ACTIVE</span>
+      </div>
+
+      <!-- 4 Mode Buttons -->
+      <div style="font-size:10px;color:#64748b;letter-spacing:0.1em;margin-bottom:8px">TRADING MODE</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+        <button class="btn btn-active-indigo">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          DTR
+        </button>
+        <button class="btn btn-inactive">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m13 2-2 2.5h3L12 7"/><path d="M10 14v-3h4v3"/><path d="M15.5 17a2.5 2.5 0 0 1-5 0"/><path d="M8.5 10A6 6 0 0 1 12 4a6 6 0 0 1 6 6c0 3.5-2.5 6-6 9"/></svg>
+          XXX
+        </button>
+        <button class="btn btn-inactive">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16z"/><path d="M12 8v4l3 3"/></svg>
+          AI MODE
+        </button>
+        <button class="btn btn-inactive">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          HALT
+        </button>
+      </div>
+      <div style="font-size:10px;color:#6366f1;background:rgba(99,102,241,0.1);padding:5px 10px;border-radius:5px;margin-bottom:14px">
+        Active: DTR — 2AM + 9AM (NY sessions)
+      </div>
+
+      <!-- Daily Stats -->
+      <div style="border-top:1px solid #334155;padding-top:12px">
+        <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">
+          <div>
+            <div class="label">Daily P&L</div>
+            <div class="value" style="color:#22c55e">+$847.50</div>
+          </div>
+          <div>
+            <div class="label">Trades</div>
+            <div class="value">4 / 4</div>
+          </div>
+          <div>
+            <div class="label">Win Rate</div>
+            <div class="value" style="color:#22c55e">75%</div>
+          </div>
+          <div>
+            <div class="label">Open</div>
+            <div class="value" style="color:#f59e0b">1</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- HALT button -->
+      <div style="border-top:1px solid #334155;padding-top:12px;margin-top:12px">
+        <button style="width:100%;height:36px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#f87171;border-radius:6px;font-family:monospace;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">
+          <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          EMERGENCY HALT
+        </button>
+      </div>
+    </div>
+
+    <!-- Account Selector -->
+    <div class="card p-4">
+      <div class="flex items-center gap-2 mb-4 pb-3" style="border-bottom:1px solid #334155">
+        <svg width="14" height="14" fill="none" stroke="#6366f1" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        <span style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:#94a3b8">TRADING ACCOUNT</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <!-- Active account -->
+        <button class="account-btn account-active">
+          <span style="font-weight:700">50k Challenge</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="color:#64748b">$48,920</span>
+            <svg width="12" height="12" fill="none" stroke="#818cf8" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+        </button>
+        <!-- Inactive account -->
+        <button class="account-btn account-inactive">
+          <span style="font-weight:700">150k Funded</span>
+          <span style="color:#64748b">$148,300</span>
+        </button>
+        <!-- Inactive account -->
+        <button class="account-btn account-inactive">
+          <span style="font-weight:700">100k Challenge</span>
+          <span style="color:#64748b">$99,100</span>
+        </button>
+      </div>
+      <p style="font-size:10px;color:#475569;margin-top:10px;line-height:1.4">
+        Open trades continue running when switching accounts.
+      </p>
+    </div>
+
+    <!-- PnL Progress -->
+    <div class="card p-4">
+      <div class="mb-4 pb-3" style="border-bottom:1px solid #334155">
+        <span style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:#94a3b8">DAILY TARGET PROGRESS</span>
+      </div>
+      <div style="margin-bottom:24px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <span style="font-size:11px;color:#ef4444">Floor −$200</span>
+          <span style="font-size:22px;font-weight:700;color:#22c55e">+$847.50</span>
+          <span style="font-size:11px;color:#22c55e">Target $1,400</span>
+        </div>
+        <!-- Progress bar -->
+        <div style="height:12px;background:#1e3a2a;border-radius:6px;overflow:hidden;position:relative;border:1px solid #334155">
+          <div style="position:absolute;left:12.5%;width:60.3%;height:100%;background:linear-gradient(90deg,#16a34a,#22c55e);border-radius:6px;transition:width 1s"></div>
+          <!-- Zero line -->
+          <div style="position:absolute;left:12.5%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.2)"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px">
+          <span style="font-size:10px;color:#64748b">Loss limit</span>
+          <span style="font-size:10px;color:#64748b">60.5% to target</span>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding-top:12px;border-top:1px solid #334155">
+        <div><div class="label">Trades</div><div class="value">4</div></div>
+        <div><div class="label">Win/Loss</div><div class="value"><span style="color:#22c55e">3</span> / <span style="color:#ef4444">1</span></div></div>
+        <div><div class="label">London</div><div class="value" style="color:#22c55e">+$320</div></div>
+        <div><div class="label">NY</div><div class="value" style="color:#22c55e">+$527</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row 2: Instrument Cards -->
+  <div>
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:#64748b;padding-bottom:8px;margin-bottom:12px;border-bottom:1px solid #334155">
+      ACTIVE INSTRUMENTS — DTR STAGES
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+
+      <!-- NQ — Stage 4 BOS -->
+      <div class="instrument-card bos-glow">
+        <div class="flex justify-between items-start mb-3">
+          <div>
+            <div style="font-size:13px;font-weight:700">MNQ</div>
+            <div style="font-size:10px;color:#94a3b8">Micro NQ · $20/pt</div>
+          </div>
+          <span class="tag blink" style="background:rgba(99,102,241,0.2);color:#818cf8">BOS ⚡</span>
+        </div>
+        <!-- Stage dots 0-4 -->
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-active" style="background:#f59e0b;box-shadow:0 0 6px #f59e0b"></div>
+        </div>
+        <div class="range-bar">
+          <div class="range-fill" style="left:20%;width:60%"></div>
+          <div class="range-marker" style="left:72%;background:#6366f1"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+          <div><div class="label">Direction</div><div class="value" style="color:#22c55e;font-size:12px">▲ LONG</div></div>
+          <div><div class="label">Session</div><div class="value" style="font-size:12px">9AM</div></div>
+          <div><div class="label">SL</div><div class="value" style="color:#ef4444;font-size:11px">21,042.50</div></div>
+          <div><div class="label">TP3</div><div class="value" style="color:#22c55e;font-size:11px">21,380.00</div></div>
+        </div>
+        <!-- Open trade indicator -->
+        <div style="margin-top:10px;padding:6px 10px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:5px">
+          <div style="font-size:10px;color:#22c55e;font-weight:700">IN TRADE — TP1 ✓ → BE</div>
+          <div style="font-size:10px;color:#64748b">Entry @ 21,180.00 · P&L +$420</div>
+        </div>
+      </div>
+
+      <!-- YM — Stage 3 -->
+      <div class="instrument-card">
+        <div class="flex justify-between items-start mb-3">
+          <div>
+            <div style="font-size:13px;font-weight:700">MYM</div>
+            <div style="font-size:10px;color:#94a3b8">Mini YM · $12.50/pt</div>
+          </div>
+          <span class="tag" style="background:rgba(148,163,184,0.1);color:#64748b">STAGE 3</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-inactive"></div>
+        </div>
+        <div class="range-bar">
+          <div class="range-fill" style="left:10%;width:80%;background:linear-gradient(90deg,#475569,#6366f1)"></div>
+          <div class="range-marker" style="left:75%;background:#6366f1"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+          <div><div class="label">Direction</div><div class="value" style="color:#ef4444;font-size:12px">▼ SHORT</div></div>
+          <div><div class="label">Session</div><div class="value" style="font-size:12px">9AM</div></div>
+          <div><div class="label">Range H</div><div class="value" style="font-size:11px">43,820</div></div>
+          <div><div class="label">Range L</div><div class="value" style="font-size:11px">43,650</div></div>
+        </div>
+        <div style="margin-top:10px;padding:5px 8px;background:rgba(99,102,241,0.06);border-radius:5px;font-size:10px;color:#6366f1">
+          Retest in progress — watching for BOS gate
+        </div>
+      </div>
+
+      <!-- Gold — Stage 1 -->
+      <div class="instrument-card">
+        <div class="flex justify-between items-start mb-3">
+          <div>
+            <div style="font-size:13px;font-weight:700">MGC</div>
+            <div style="font-size:10px;color:#94a3b8">Micro Gold · $10/pt</div>
+          </div>
+          <span class="tag" style="background:rgba(148,163,184,0.1);color:#64748b">STAGE 1</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-active"></div>
+          <div class="stage-dot stage-inactive"></div>
+          <div class="stage-dot stage-inactive"></div>
+          <div class="stage-dot stage-inactive"></div>
+        </div>
+        <div class="range-bar">
+          <div class="range-fill" style="left:5%;width:30%;background:linear-gradient(90deg,#334155,#475569)"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+          <div><div class="label">Direction</div><div class="value" style="color:#22c55e;font-size:12px">▲ LONG</div></div>
+          <div><div class="label">Session</div><div class="value" style="font-size:12px">2AM</div></div>
+          <div><div class="label">Range H</div><div class="value" style="font-size:11px">3,342.80</div></div>
+          <div><div class="label">Range L</div><div class="value" style="font-size:11px">3,335.20</div></div>
+        </div>
+        <div style="margin-top:10px;padding:5px 8px;background:rgba(148,163,184,0.04);border-radius:5px;font-size:10px;color:#64748b">
+          Swept low — watching for bias candle
+        </div>
+      </div>
+
+      <!-- Oil — Idle -->
+      <div class="instrument-card">
+        <div class="flex justify-between items-start mb-3">
+          <div>
+            <div style="font-size:13px;font-weight:700">MCL</div>
+            <div style="font-size:10px;color:#94a3b8">Micro CL · $10/pt</div>
+          </div>
+          <span class="tag" style="background:rgba(148,163,184,0.05);color:#475569">IDLE</span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+          <div class="stage-dot stage-inactive"></div>
+          <div class="stage-dot stage-inactive"></div>
+          <div class="stage-dot stage-inactive"></div>
+          <div class="stage-dot stage-inactive"></div>
+          <div class="stage-dot stage-inactive"></div>
+        </div>
+        <div class="range-bar"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+          <div><div class="label">Direction</div><div class="value" style="font-size:12px;color:#475569">—</div></div>
+          <div><div class="label">Session</div><div class="value" style="font-size:12px;color:#475569">—</div></div>
+          <div><div class="label">ATR14</div><div class="value" style="font-size:11px;color:#64748b">0.420</div></div>
+          <div><div class="label">Next</div><div class="value" style="font-size:11px;color:#64748b">2AM</div></div>
+        </div>
+        <div style="margin-top:10px;padding:5px 8px;background:rgba(148,163,184,0.04);border-radius:5px;font-size:10px;color:#475569">
+          Outside session window
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Row 3: Hermes Insights + Trade Log -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+
+    <!-- Hermes Insights -->
+    <div class="card p-4">
+      <div class="flex items-center gap-2 mb-4 pb-3" style="border-bottom:1px solid #334155">
+        <svg width="14" height="14" fill="none" stroke="#6366f1" stroke-width="2" viewBox="0 0 24 24"><path d="M12 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16z"/><path d="M12 8v4l3 3"/></svg>
+        <span style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:#94a3b8">HERMES INSIGHTS</span>
+        <span class="tag" style="background:rgba(99,102,241,0.15);color:#818cf8;margin-left:auto">CLAUDE+HERMES</span>
+      </div>
+      <div style="margin-bottom:10px">
+        <div class="label">Regime</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:13px;font-weight:700;color:#22c55e">TRENDING ↑</span>
+          <span style="font-size:10px;color:#64748b">NQ bullish bias, elevated ATR</span>
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div class="label" style="color:#22c55e;margin-bottom:6px">Golden Setups</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <div style="display:flex;justify-content:space-between;padding:5px 8px;background:rgba(34,197,94,0.07);border-radius:5px;font-size:11px">
+            <span>NQ 9AM LONG (Wed)</span>
+            <span style="color:#22c55e;font-weight:700">80% WR · 10 trades</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:5px 8px;background:rgba(34,197,94,0.07);border-radius:5px;font-size:11px">
+            <span>Gold 2AM LONG</span>
+            <span style="color:#22c55e;font-weight:700">73% WR · 15 trades</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="label" style="color:#ef4444;margin-bottom:6px">Avoid Patterns</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <div style="display:flex;justify-content:space-between;padding:5px 8px;background:rgba(239,68,68,0.07);border-radius:5px;font-size:11px">
+            <span>Oil 9AM SHORT (Tue)</span>
+            <span style="color:#ef4444;font-weight:700">33% WR · 6 trades</span>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:10px;padding:8px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.2);border-radius:6px">
+        <div style="font-size:10px;color:#818cf8;font-weight:700;margin-bottom:4px">⚙ PROPOSED CHANGE</div>
+        <div style="font-size:11px;color:#94a3b8">fvgSizeMult: 1.5 → 1.8</div>
+        <div style="font-size:10px;color:#64748b;margin-top:2px">Bias candles below 1.8× ATR showed 3/5 false BOS</div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button style="flex:1;height:28px;background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);color:#22c55e;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">✅ Approve</button>
+          <button style="flex:1;height:28px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#f87171;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">❌ Reject</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trade Log -->
+    <div class="card p-4">
+      <div class="flex items-center gap-2 mb-4 pb-3" style="border-bottom:1px solid #334155">
+        <svg width="14" height="14" fill="none" stroke="#6366f1" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <span style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:#94a3b8">TRADE LOG</span>
+        <span style="font-size:10px;color:#64748b;margin-left:auto">Today · 4 trades</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+
+        <!-- Trade 1 — Open -->
+        <div style="padding:8px 10px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.2);border-radius:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="display:flex;gap:8px;align-items:center">
+              <span style="font-size:12px;font-weight:700">MNQ</span>
+              <span style="font-size:10px;font-weight:700;color:#22c55e">▲ LONG</span>
+              <span style="font-size:10px;color:#64748b">9AM</span>
+            </div>
+            <span style="font-size:11px;font-weight:700;color:#22c55e">+$420 <span class="blink">●</span></span>
+          </div>
+          <div style="font-size:10px;color:#64748b">Entry 21,180 · TP1 ✓ (BE) · TP2 @ 21,293</div>
+          <div style="font-size:10px;color:#6366f1;margin-top:2px">Claude: HIGH CONF — Golden setup Wed 9AM</div>
+        </div>
+
+        <!-- Trade 2 — WIN -->
+        <div style="padding:8px 10px;background:rgba(34,197,94,0.05);border:1px solid rgba(34,197,94,0.15);border-radius:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="display:flex;gap:8px;align-items:center">
+              <span style="font-size:12px;font-weight:700">MGC</span>
+              <span style="font-size:10px;font-weight:700;color:#22c55e">▲ LONG</span>
+              <span style="font-size:10px;color:#64748b">2AM</span>
+            </div>
+            <span style="font-size:11px;font-weight:700;color:#22c55e">+$230</span>
+          </div>
+          <div style="font-size:10px;color:#64748b">Entry 3,338.20 · TP3 ✓ Full close</div>
+        </div>
+
+        <!-- Trade 3 — WIN -->
+        <div style="padding:8px 10px;background:rgba(34,197,94,0.05);border:1px solid rgba(34,197,94,0.15);border-radius:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="display:flex;gap:8px;align-items:center">
+              <span style="font-size:12px;font-weight:700">MYM</span>
+              <span style="font-size:10px;font-weight:700;color:#ef4444">▼ SHORT</span>
+              <span style="font-size:10px;color:#64748b">9AM</span>
+            </div>
+            <span style="font-size:11px;font-weight:700;color:#22c55e">+$197.50</span>
+          </div>
+          <div style="font-size:10px;color:#64748b">Entry 43,820 · TP2 ✓ then SL @ TP1</div>
+        </div>
+
+        <!-- Trade 4 — LOSS -->
+        <div style="padding:8px 10px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.15);border-radius:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="display:flex;gap:8px;align-items:center">
+              <span style="font-size:12px;font-weight:700">MCL</span>
+              <span style="font-size:10px;font-weight:700;color:#22c55e">▲ LONG</span>
+              <span style="font-size:10px;color:#64748b">9AM</span>
+            </div>
+            <span style="font-size:11px;font-weight:700;color:#ef4444">−$100</span>
+          </div>
+          <div style="font-size:10px;color:#64748b">Entry 62.40 · SL hit before TP1</div>
+          <div style="font-size:10px;color:#ef4444;margin-top:2px">Claude: SKIPPED (avoid pattern) · Hermes override</div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #1e293b;font-size:10px;color:#334155">
+  DecanatorFX AI Trading Platform · DTR + XXX · Powered by Hermes 3 + Claude haiku-4-5
+</div>
+
+</body>
+</html>

@@ -1,300 +1,563 @@
 """
-Updated Flask App - With Position Limits Integrated
-===================================================
-CORRECTED VERSION - Use this file in Replit
+Flask Autonomous Trading App
+=============================
+Production entrypoint for the DTR AI Trading Platform.
 
-Changes:
-1. Imports MasterTradingOrchestratorWithLimits (not old version)
-2. Position limits enforced (one per symbol)
-3. Daily loss limit: -$200
-4. Daily profit limit: +$1,400
+Boot sequence:
+  1. Flask starts (Gunicorn)
+  2. MarketDataOrchestrator.start() runs in a background asyncio task
+  3. Orchestrator fetches bars every 60s, runs DTR state machines
+  4. React frontend polls /api/live/dashboard every 3s
+
+Endpoints:
+  POST /api/mode/dtr              — Rule-based DTR only (BOS signal entries)
+  POST /api/mode/xxx              — XXX strategy (ALMA crossover, London+NY session)
+  POST /api/mode/claude           — Full AI: Claude + Hermes
+  POST /api/mode/halt             — Stop all trading
+  POST /api/mode/resume           — Resume from drawdown halt
+  GET  /api/mode/status           — Current mode + health
+  GET  /api/live/dashboard        — Real-time state (polled every 3s)
+  GET  /api/trades/history        — Last N trades from Supabase
+  GET  /api/performance/metrics   — Win rate, P&L, streaks
+  GET  /api/hermes/insights       — trading_context for all symbols
+  GET  /api/ai/log                — Claude + Hermes decision log
+  GET  /api/drawdown/status       — Drawdown monitor state
+  POST /api/telegram/callback     — Hermes approve/reject param change
+  GET  /api/accounts              — List all ProjectX accounts
+  POST /api/accounts/select       — Switch active trading account
+
+Deploy: gunicorn -w 2 -b 0.0.0.0:$PORT "dtr-complete-final.flask_autonomous_trading:app"
 """
 
-from flask import Flask, render_template, jsonify, request
-from POSITION_AND_LIMIT_MANAGER import PositionAndLimitManager
-from AUTONOMOUS_TRADING_ENGINE_WITH_LIMITS import MasterTradingOrchestratorWithLimits
 import asyncio
-import os
 import logging
+import os
+import threading
+from datetime import datetime, timezone
 
-logging.basicConfig(level=logging.INFO)
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+from market_data_orchestrator import orchestrator
+from drawdown_monitor import DrawdownMonitor
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# App init
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
 
-# ═══════════════════════════════════════════════════════════════════════════
-# INITIALIZE ORCHESTRATOR WITH POSITION LIMITS
-# ═══════════════════════════════════════════════════════════════════════════
+CORS(app, origins=[
+    os.environ.get("FRONTEND_URL", "http://localhost:5173"),
+    "https://*.vercel.app",
+    "http://localhost:3000",
+])
 
-# These should be initialized from your existing modules
-api = None  # ProjectXAPI instance
-learning_agent = None  # Learning agent instance
-notifier = None  # Telegram notifier instance
-pl_tracker = None  # P&L tracker instance
+drawdown_monitor = DrawdownMonitor(
+    loss_limit=float(os.environ.get("DAILY_LOSS_LIMIT",   200)),
+    profit_target=float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+)
 
-orchestrator = None
+# Wire drawdown monitor → orchestrator (injected after both are created)
+orchestrator._drawdown_monitor = drawdown_monitor
 
-def init_orchestrator():
-    """Initialize orchestrator with position limits"""
-    global orchestrator
-    orchestrator = MasterTradingOrchestratorWithLimits(api, learning_agent, notifier)
-    logger.info("✓ Orchestrator initialized WITH POSITION LIMITS")
 
-# ═══════════════════════════════════════════════════════════════════════════
-# DTR MODE ENDPOINTS (Auto-Execute with Position Limits)
-# ═══════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# Background orchestrator thread
+# ─────────────────────────────────────────────────────────────────────────────
 
-@app.route('/api/mode/dtr', methods=['POST'])
-async def switch_to_dtr():
-    """
-    Switch to DTR rules mode with position limits
-    Auto-executes trades when stage 5 + entry window met
-    Enforces: One position per symbol, daily loss limit (-$200), daily profit limit (+$1,400)
-    """
+def _run_orchestrator_loop() -> None:
+    """Run the async orchestrator in its own event loop (separate thread)."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    orchestrator._loop = loop  # store ref for sync→async bridging (account switching)
     try:
-        await orchestrator.switch_to_dtr_mode()
-        
-        return jsonify({
-            'success': True,
-            'mode': 'dtr',
-            'message': 'DTR auto-execution started WITH POSITION LIMITS',
-            'auto_execution': True,
-            'monitoring_interval': 30,
-            'position_limits': {
-                'one_per_symbol': True,
-                'loss_limit': -200,
-                'profit_limit': 1400
-            },
-            'status': 'Running - checking every 30 seconds'
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        loop.run_until_complete(orchestrator.start())
+    except Exception as exc:
+        logger.error(f"❌ Orchestrator loop crashed: {exc}", exc_info=True)
+    finally:
+        loop.close()
 
-# ═══════════════════════════════════════════════════════════════════════════
-# CLAUDE MODE ENDPOINTS (Auto-Execute with Position Limits)
-# ═══════════════════════════════════════════════════════════════════════════
 
-@app.route('/api/mode/claude', methods=['POST'])
-async def switch_to_claude():
-    """
-    Switch to Claude AI mode with position limits
-    Auto-executes on Claude signals (60%+ confidence)
-    Auto-exits on bias conflicts
-    Enforces: One position per symbol, daily loss limit (-$200), daily profit limit (+$1,400)
-    """
-    try:
-        await orchestrator.switch_to_claude_mode()
-        
-        return jsonify({
-            'success': True,
-            'mode': 'claude',
-            'message': 'Claude auto-execution started WITH POSITION LIMITS',
-            'auto_execution': True,
-            'bias_conflict_exit': True,
-            'monitoring_interval': 30,
-            'position_limits': {
-                'one_per_symbol': True,
-                'loss_limit': -200,
-                'profit_limit': 1400
-            },
-            'status': 'Running - checking every 30 seconds'
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+def _boot_orchestrator() -> None:
+    t = threading.Thread(target=_run_orchestrator_loop, daemon=True, name="orchestrator")
+    t.start()
+    logger.info("🚀 Orchestrator background thread started")
 
-# ═══════════════════════════════════════════════════════════════════════════
-# HALT ENDPOINT
-# ═══════════════════════════════════════════════════════════════════════════
 
-@app.route('/api/mode/halt', methods=['POST'])
-async def halt_trading():
-    """Stop all auto-execution and trading"""
-    try:
-        await orchestrator.halt_trading()
-        
-        return jsonify({
-            'success': True,
-            'mode': 'halted',
-            'message': 'Trading halted',
-            'auto_execution': False,
-            'status': 'All monitoring stopped'
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+# Boot when Gunicorn (or __main__) starts
+_boot_orchestrator()
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STATUS ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════
 
-@app.route('/api/mode/status')
+# ─────────────────────────────────────────────────────────────────────────────
+# Mode control endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/mode/dtr", methods=["POST"])
+def switch_to_dtr():
+    orchestrator.set_active_strategy("DTR")
+    orchestrator.set_mode("DTR")
+    return jsonify({
+        "success": True,
+        "mode": "DTR",
+        "active_strategy": "DTR",
+        "message": "DTR rule-based trading active. BOS signal entries.",
+        "ai_validation": False,
+    })
+
+
+@app.route("/api/mode/xxx", methods=["POST"])
+def switch_to_xxx():
+    orchestrator.set_active_strategy("XXX")
+    orchestrator.set_mode("DTR")  # DTR mode = rule-based, just different strategy
+    return jsonify({
+        "success": True,
+        "mode": "DTR",
+        "active_strategy": "XXX",
+        "message": "XXX strategy active. ALMA crossover signals, London+NY session.",
+    })
+
+
+@app.route("/api/mode/claude", methods=["POST"])
+def switch_to_claude():
+    orchestrator.set_mode("CLAUDE+HERMES")
+    return jsonify({
+        "success": True,
+        "mode": "CLAUDE+HERMES",
+        "message": "Full AI mode: Claude validates entries, Hermes learns after each trade.",
+        "ai_validation": True,
+    })
+
+
+@app.route("/api/mode/halt", methods=["POST"])
+def halt_trading():
+    orchestrator.set_mode("HALT")
+    return jsonify({
+        "success": True,
+        "mode": "HALT",
+        "message": "Trading halted. Dashboard still updates.",
+    })
+
+
+@app.route("/api/mode/resume", methods=["POST"])
+def resume_trading():
+    """Resume from drawdown auto-halt. Does not change mode."""
+    orchestrator.resume_from_halt()
+    return jsonify({
+        "success": True,
+        "message": "Trading resumed from halt.",
+        "mode": orchestrator.mode,
+    })
+
+
+@app.route("/api/mode/status")
 def mode_status():
-    """Get current mode and auto-execution status"""
-    status = orchestrator.get_status()
-    
+    state = orchestrator.get_dashboard_state()
     return jsonify({
-        'success': True,
-        'mode': status['mode'],
-        'auto_executing': status['auto_executing'],
-        'monitoring_interval': status['monitor_interval'],
-        'position_limits': status['position_limits'],
-        'message': f"Mode: {status['mode'].upper()}, Auto: {'ON' if status['auto_executing'] else 'OFF'}"
+        "success":           True,
+        "mode":              orchestrator.mode,
+        "active_strategy":   orchestrator.active_strategy_name,
+        "active_account_id": orchestrator.active_account_id,
+        "halted":            orchestrator.halted,
+        "halt_reason":       orchestrator.halt_reason,
+        "running":           orchestrator.running,
+        "daily_pnl":         state.get("daily_pnl", 0),
+        "trade_count":       state.get("trade_count", 0),
+        "timestamp":         datetime.now(timezone.utc).isoformat(),
     })
 
-@app.route('/api/orchestrator/status')
-def orchestrator_status():
-    """Get full orchestrator status"""
-    status = orchestrator.get_status()
-    
-    status_text = {
-        'halted': '⏹️ HALTED - No trading',
-        'dtr': f"📊 DTR AUTO - Running ({status['monitor_interval']}s checks) - Position limits ENFORCED",
-        'claude': f"🧠 CLAUDE AUTO - Running ({status['monitor_interval']}s checks) - Position limits ENFORCED"
-    }
-    
-    return jsonify({
-        'success': True,
-        'status': status,
-        'human_readable': status_text[status['mode']],
-        'auto_execution_active': status['auto_executing'],
-        'position_limits_enforced': True,
-        'loss_limit': -200,
-        'profit_limit': 1400
-    })
 
-# ═══════════════════════════════════════════════════════════════════════════
-# DASHBOARD ENDPOINT (Real-Time Updates with Position Limits)
-# ═══════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# Dashboard (polled every 3s by React frontend)
+# ─────────────────────────────────────────────────────────────────────────────
 
-@app.route('/api/live/dashboard')
+@app.route("/api/live/dashboard")
 def live_dashboard():
-    """
-    Get complete dashboard data with position limits
-    Updates every 2 seconds in browser
-    Shows orchestrator status + P&L + position limits
-    """
-    
     try:
-        orchestrator_status = orchestrator.get_status()
-        pl_data = pl_tracker.get_dashboard_data() if pl_tracker else {}
-        
-        dashboard = {
-            'success': True,
-            'timestamp': orchestrator_status['timestamp'],
-            'orchestrator': orchestrator_status,
-            'trading': {
-                'mode': orchestrator_status['mode'],
-                'auto_executing': orchestrator_status['auto_executing'],
-                'monitoring_interval': orchestrator_status['monitor_interval'],
-                'status_text': f"{orchestrator_status['mode'].upper()} - Auto: {'ON' if orchestrator_status['auto_executing'] else 'OFF'}"
-            },
-            'position_limits': {
-                'one_per_symbol': True,
-                'loss_limit': -200,
-                'profit_limit': 1400,
-                'enforced': True
-            },
-            'p_and_l': pl_data,
-            'refresh_note': 'Dashboard auto-refreshes - no manual refresh needed'
-        }
-        
-        return jsonify(dashboard)
-    
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        state = orchestrator.get_dashboard_state()
+        state["drawdown"] = drawdown_monitor.status()
+        return jsonify({"success": True, **state})
+    except Exception as exc:
+        logger.error(f"❌ Dashboard error: {exc}")
+        return jsonify({"success": False, "error": "Dashboard unavailable"}), 500
 
-# ═══════════════════════════════════════════════════════════════════════════
-# DTR STATE UPDATE ENDPOINT
-# ═══════════════════════════════════════════════════════════════════════════
 
-@app.route('/api/dtr/state/update', methods=['POST'])
-def update_dtr_state():
-    """
-    Update DTR state (called by DTR strategy)
-    Orchestrator monitors and auto-executes when stage 5 + entry window
-    Position limits enforced
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+# Trade history
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/trades/history")
+def trade_history():
+    limit = min(int(request.args.get("limit", 50)), 200)
+    symbol = request.args.get("symbol")
+
+    supabase = orchestrator._supabase
+    if not supabase:
+        # Fall back to in-memory trades
+        trades = orchestrator.daily_trades[-limit:]
+        if symbol:
+            trades = [t for t in trades if t.get("symbol") == symbol]
+        return jsonify({"success": True, "trades": trades, "source": "memory"})
+
     try:
-        data = request.json
-        symbol = data.get('symbol')
-        state = data.get('state')
-        
-        orchestrator.update_dtr_state(symbol, state)
-        
+        q = supabase.table("trades").select("*").order("opened_at", desc=True).limit(limit)
+        if symbol:
+            q = q.eq("symbol", symbol)
+        resp = q.execute()
+        return jsonify({"success": True, "trades": resp.data or [], "source": "supabase"})
+    except Exception as exc:
+        logger.error(f"❌ Trade history error: {exc}")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Performance metrics
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/performance/metrics")
+def performance_metrics():
+    trades = orchestrator.daily_trades
+    total  = len(trades)
+    wins   = sum(1 for t in trades if t.get("outcome") == "WIN")
+    losses = sum(1 for t in trades if t.get("outcome") == "LOSS")
+    daily_pnl = orchestrator.daily_pnl
+    win_rate  = (wins / total) if total else 0.0
+
+    # Per-symbol breakdown
+    symbols: dict = {}
+    for t in trades:
+        sym = t.get("symbol", "?")
+        if sym not in symbols:
+            symbols[sym] = {"wins": 0, "losses": 0, "pnl": 0.0}
+        if t.get("outcome") == "WIN":
+            symbols[sym]["wins"] += 1
+        elif t.get("outcome") == "LOSS":
+            symbols[sym]["losses"] += 1
+        symbols[sym]["pnl"] += t.get("pnl", 0)
+
+    return jsonify({
+        "success":   True,
+        "today": {
+            "trades":    total,
+            "wins":      wins,
+            "losses":    losses,
+            "win_rate":  round(win_rate, 4),
+            "daily_pnl": round(daily_pnl, 2),
+        },
+        "by_symbol":      symbols,
+        "drawdown":       drawdown_monitor.status(),
+        "open_positions": len(orchestrator.open_trades),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hermes insights
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/hermes/insights")
+def hermes_insights():
+    """Return trading_context for all symbols (Hermes long-term memory)."""
+    symbol = request.args.get("symbol")
+    supabase = orchestrator._supabase
+
+    if not supabase:
+        return jsonify({"success": True, "insights": {}, "source": "none"})
+
+    try:
+        q = supabase.table("trading_context").select("symbol, context, updated_at")
+        if symbol:
+            q = q.eq("symbol", symbol)
+        resp = q.execute()
+        insights = {row["symbol"]: row for row in (resp.data or [])}
+        return jsonify({"success": True, "insights": insights, "source": "supabase"})
+    except Exception as exc:
+        logger.error(f"❌ Hermes insights error: {exc}")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI decision log
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/ai/log")
+def ai_log():
+    limit = min(int(request.args.get("limit", 50)), 200)
+    supabase = orchestrator._supabase
+
+    if not supabase:
+        return jsonify({"success": True, "log": [], "source": "none"})
+
+    try:
+        resp = (
+            supabase.table("agent_audit_log")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return jsonify({"success": True, "log": resp.data or [], "source": "supabase"})
+    except Exception as exc:
+        logger.error(f"❌ AI log error: {exc}")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Drawdown status
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/drawdown/status")
+def drawdown_status():
+    return jsonify({"success": True, **drawdown_monitor.status()})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Telegram callback (approve/reject Hermes param proposals)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/telegram/callback", methods=["POST"])
+def telegram_callback():
+    """
+    Receives Telegram inline button callbacks for Hermes parameter approvals.
+    Callback data format: APPROVE_{symbol}_{param}_{value} or REJECT_{symbol}_{param}
+    """
+    data = request.json or {}
+    callback_query = data.get("callback_query", {})
+    cb_data = callback_query.get("data", "")
+
+    parts = cb_data.split("_", 3)
+    if len(parts) < 3:
+        return jsonify({"ok": True})
+
+    action = parts[0]  # APPROVE | REJECT
+    symbol = parts[1]
+    param  = parts[2]
+
+    if action == "APPROVE" and len(parts) == 4:
+        value = float(parts[3])
+        strategy = orchestrator.strategies.get(symbol)
+        if strategy:
+            strategy.set_params({param: value})
+            logger.info(f"✅ Telegram APPROVED: {symbol} {param} → {value}")
+
+    elif action == "REJECT":
+        logger.info(f"❌ Telegram REJECTED: {symbol} {param}")
+
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Account management
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/accounts", methods=["GET"])
+def list_accounts():
+    """Return all ProjectX accounts available under current login."""
+    return jsonify({
+        "success":           True,
+        "accounts":          orchestrator.available_accounts,
+        "active_account_id": orchestrator.active_account_id,
+    })
+
+
+@app.route("/api/accounts/select", methods=["POST"])
+def select_account():
+    """Switch active trading account."""
+    import concurrent.futures
+
+    data = request.get_json() or {}
+    account_id = data.get("account_id")
+    if not account_id:
+        return jsonify({"success": False, "error": "account_id required"}), 400
+
+    # Check if account exists in the known list (skip check when list is still empty)
+    known_ids = [a.get("id") for a in orchestrator.available_accounts]
+    if known_ids and account_id not in known_ids:
+        return jsonify({"success": False, "error": "Account not found"}), 404
+
+    # Bridge sync Flask route → async orchestrator method via stored event loop
+    loop = getattr(orchestrator, "_loop", None)
+    if loop is None or not loop.is_running():
+        return jsonify({"success": False, "error": "Orchestrator event loop not ready"}), 503
+
+    future = asyncio.run_coroutine_threadsafe(
+        orchestrator.set_active_account(account_id),
+        loop,
+    )
+    try:
+        result = future.result(timeout=10)
+    except Exception as exc:
+        logger.error(f"❌ select_account error: {exc}", exc_info=True)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    if result:
         return jsonify({
-            'success': True,
-            'symbol': symbol,
-            'stage': state.get('stage'),
-            'in_entry_window': state.get('in_entry_window'),
-            'bias': state.get('bias'),
-            'message': f"DTR state updated for {symbol}"
+            "success":           True,
+            "active_account_id": account_id,
+            "message":           f"Active account switched to {account_id}",
         })
-    
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+    return jsonify({"success": False, "error": "Failed to switch account"}), 500
 
-# ═══════════════════════════════════════════════════════════════════════════
-# MARKET BIAS UPDATE ENDPOINT
-# ═══════════════════════════════════════════════════════════════════════════
 
-@app.route('/api/market/bias/update', methods=['POST'])
-def update_market_bias():
-    """
-    Update market bias (called by Claude analysis)
-    Orchestrator monitors and exits if position conflicts
-    Position limits enforced
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+# Hermes on-demand feedback report
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/hermes/report", methods=["POST"])
+def hermes_report():
+    """Generate on-demand Hermes feedback report. Fetches trades from Supabase, calls Hermes."""
+    import asyncio as _asyncio
+
+    data = request.get_json() or {}
+    period = data.get("period", "7d")   # "7d" | "30d" | "all"
+
+    supabase = orchestrator._supabase
+    if not supabase:
+        return jsonify({"success": False, "error": "Supabase not connected"}), 503
+
+    # Fetch trades for the period
     try:
-        data = request.json
-        bias_data = data.get('bias_data')
-        
-        orchestrator.update_market_bias(bias_data)
-        
-        return jsonify({
-            'success': True,
-            'bias_updates': len(bias_data),
-            'message': f"Market bias updated"
-        })
-    
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        from datetime import timedelta
+        cutoff = None
+        if period == "7d":
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        elif period == "30d":
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
-# ═══════════════════════════════════════════════════════════════════════════
-# MAIN DASHBOARD
-# ═══════════════════════════════════════════════════════════════════════════
+        q = supabase.table("trades").select("*").order("opened_at", desc=True).limit(200)
+        if cutoff:
+            q = q.gte("opened_at", cutoff)
+        trades_resp = q.execute()
+        trades = trades_resp.data or []
 
-@app.route('/')
-def dashboard():
-    """Main dashboard with mode controls and position limits"""
-    return render_template('dashboard_autonomous.html')
+        ctx_resp = supabase.table("trading_context").select("symbol, context").execute()
+        contexts = {row["symbol"]: row["context"] for row in (ctx_resp.data or [])}
+    except Exception as exc:
+        logger.error(f"❌ hermes_report fetch error: {exc}")
+        return jsonify({"success": False, "error": str(exc)}), 500
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STARTUP
-# ═══════════════════════════════════════════════════════════════════════════
+    # Call Hermes generate_feedback_report via asyncio bridge
+    hermes_brain = orchestrator._hermes_brain
+    if not hermes_brain:
+        return jsonify({"success": False, "error": "Hermes brain not loaded"}), 503
 
-if __name__ == '__main__':
-    print("\n" + "="*80)
-    print("AUTONOMOUS TRADING ENGINE WITH POSITION LIMITS")
-    print("="*80)
-    print("✓ DTR Mode: Auto-executes on stage 5")
-    print("✓ Claude Mode: Auto-executes on signal + exits on bias conflict")
-    print("✓ Position Limits: One per symbol ENFORCED")
-    print("✓ Daily Loss Limit: -$200 (auto-close all)")
-    print("✓ Daily Profit Limit: +$1,400 (auto-close all)")
-    print("✓ Continuous Monitoring: Every 30 seconds")
-    print("✓ No Manual Clicks: Fully autonomous after mode selection")
-    print("="*80 + "\n")
-    
-    # Initialize components (replace with your actual initialization)
-    # from projectx_api import ProjectXAPI
-    # from COMPLETE_LEARNING_SYSTEM import SelfLearningTradingAgent
-    # from TRADE_LOGGER_TELEGRAM import TelegramNotifier
-    # from LIVE_PL_TRACKER import LivePLTracker
-    
-    # api = ProjectXAPI(...)
-    # learning_agent = SelfLearningTradingAgent(...)
-    # notifier = TelegramNotifier(...)
-    # pl_tracker = LivePLTracker(...)
-    
-    # init_orchestrator()
-    
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    loop = getattr(orchestrator, "_loop", None)
+    if loop is None or not loop.is_running():
+        return jsonify({"success": False, "error": "Orchestrator event loop not ready"}), 503
+
+    future = _asyncio.run_coroutine_threadsafe(
+        hermes_brain.generate_feedback_report(trades, contexts, period),
+        loop,
+    )
+    try:
+        report = future.result(timeout=60)   # Hermes can take up to 30s
+    except Exception as exc:
+        logger.error(f"❌ hermes_report generation error: {exc}", exc_info=True)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    return jsonify({"success": True, "report": report, "period": period})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Equity curve data
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/performance/equity")
+def performance_equity():
+    """Return daily equity snapshots for the equity curve chart."""
+    from datetime import timedelta
+    range_param = request.args.get("range", "7d")
+    account_id  = request.args.get("account_id", orchestrator.active_account_id)
+
+    supabase = orchestrator._supabase
+    if not supabase:
+        return jsonify({"success": True, "equity": [], "source": "none"})
+
+    try:
+        cutoff = None
+        if range_param == "7d":
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat()
+        elif range_param == "30d":
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+
+        q = (supabase.table("performance_snapshots")
+             .select("date,balance,daily_pnl,trade_count,win_rate")
+             .order("date", desc=False))
+        if account_id:
+            q = q.eq("account_id", account_id)
+        if cutoff:
+            q = q.gte("date", cutoff)
+        resp = q.execute()
+        rows = resp.data or []
+
+        # Calculate drawdown from peak balance
+        if rows:
+            peak = max((r["balance"] for r in rows if r.get("balance") is not None), default=1) or 1
+            for row in rows:
+                bal = row.get("balance") or 0
+                row["drawdown_pct"] = round((peak - bal) / peak * 100, 2) if peak else 0
+
+        return jsonify({"success": True, "equity": rows, "range": range_param})
+    except Exception as exc:
+        logger.error(f"❌ performance_equity error: {exc}")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Strategy timeframe switching
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/strategy/<name>/timeframe", methods=["POST"])
+def set_strategy_timeframe(name: str):
+    """Switch bar resolution for a strategy. Blocked if open trades exist."""
+    import asyncio as _asyncio
+
+    data = request.get_json() or {}
+    timeframe = data.get("timeframe")
+    if not timeframe:
+        return jsonify({"success": False, "error": "timeframe required"}), 400
+
+    loop = getattr(orchestrator, "_loop", None)
+    if loop is None or not loop.is_running():
+        return jsonify({"success": False, "error": "Orchestrator event loop not ready"}), 503
+
+    future = _asyncio.run_coroutine_threadsafe(
+        orchestrator.set_strategy_timeframe(name.upper(), timeframe),
+        loop,
+    )
+    try:
+        result = future.result(timeout=5)
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    return jsonify(result), 200 if result["success"] else 409
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Health check
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "status":    "ok",
+        "mode":      orchestrator.mode,
+        "running":   orchestrator.running,
+        "halted":    orchestrator.halted,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dev server
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"🌐 Flask dev server on port {port}")
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)

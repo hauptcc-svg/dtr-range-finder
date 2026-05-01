@@ -68,7 +68,7 @@ const STEP_CONFIG = [
   { label: "Swpt", tooltip: "Swept",              activeColor: "#60a5fa" },
   { label: "Bias", tooltip: "Bias candle fired",  activeColor: "#fb923c" },
   { label: "Rtst", tooltip: "Retest pending",     activeColor: "#c084fc" },
-  { label: "Sig",  tooltip: "Signal active",      activeColor: "#facc15" },
+  { label: "Sig",  tooltip: "Signal active",      activeColor: "#22c55e" },
 ] as const;
 
 function getActiveStep(stage: number, pending: boolean, signalFired: boolean): number {
@@ -198,6 +198,11 @@ export function InstrumentCard({ instrument, isAuthenticated }: InstrumentCardPr
   const isShort = instrument.position === "short";
   const isFlat = !instrument.position;
 
+  // BOS confirmed — check both sessions
+  const bosConfirmed =
+    (instrument.rbsLondon?.shortSignalFired || instrument.rbsLondon?.longSignalFired ||
+     instrument.rbsNy?.shortSignalFired || instrument.rbsNy?.longSignalFired) ?? false;
+
   const toggleMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
       const res = await fetch(`/api/agent/instruments/${instrument.symbol}/toggle`, {
@@ -226,7 +231,8 @@ export function InstrumentCard({ instrument, isAuthenticated }: InstrumentCardPr
   return (
     <Card className={cn(
       "bg-card border-border rounded-md shadow-none flex flex-col h-full transition-opacity duration-200",
-      !effectiveEnabled && "opacity-50"
+      !effectiveEnabled && "opacity-50",
+      bosConfirmed && "bos-active terminal-card-neon"
     )}>
       <CardHeader className="pb-2 border-b border-border/50 px-4 py-3 flex flex-row items-center justify-between">
         <div>

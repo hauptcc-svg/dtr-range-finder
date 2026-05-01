@@ -1,0 +1,20 @@
+# Core
+flask==3.0.3
+flask-cors==4.0.1
+gunicorn==22.0.0
+
+# Async HTTP
+aiohttp==3.9.5
+
+# Timezone
+pytz==2024.1
+
+# AI
+anthropic==0.34.2
+
+# Supabase
+supabase==2.7.4
+
+# Telegram (used via raw aiohttp — no extra package needed)
+
+# Python 3.11 zoneinfo is stdlib — no backport needed

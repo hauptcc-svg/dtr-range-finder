@@ -18,12 +18,12 @@ export function Layout({ children }: LayoutProps) {
   return (
     <div className="flex min-h-screen w-full bg-background text-foreground selection:bg-primary/30">
       {/* Sidebar */}
-      <aside className="w-64 border-r border-border bg-sidebar flex flex-col hidden md:flex shrink-0">
+      <aside className="w-64 border-r border-border bg-sidebar terminal-card flex flex-col hidden md:flex shrink-0">
         <div className="h-14 flex items-center px-4 border-b border-border">
           <Activity className="w-5 h-5 text-primary mr-2" />
-          <span className="font-bold tracking-tight text-sm">DECLANCAPITAL FX</span>
+          <span className="font-bold tracking-tight text-sm">DTR TRADING PLATFORM</span>
         </div>
-        
+
         <nav className="flex-1 py-4 flex flex-col gap-1 px-2">
           {navItems.map((item) => {
             const isActive = location === item.href;
@@ -43,6 +43,13 @@ export function Layout({ children }: LayoutProps) {
               </Link>
             );
           })}
+          <div className="px-3 py-2 mt-auto flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            </span>
+            <span className="text-[9px] font-mono text-green-500/70 uppercase tracking-widest">Live</span>
+          </div>
         </nav>
       </aside>
 
@@ -50,7 +57,14 @@ export function Layout({ children }: LayoutProps) {
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <header className="h-14 border-b border-border flex items-center px-6 md:hidden">
           <Activity className="w-5 h-5 text-primary mr-2" />
-          <span className="font-bold tracking-tight text-sm">DECLANCAPITAL FX</span>
+          <span className="font-bold tracking-tight text-sm">DTR TRADING PLATFORM</span>
+          <span className="ml-auto flex items-center gap-1.5">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            </span>
+            <span className="text-[9px] font-mono text-green-500/70 uppercase tracking-widest">Live</span>
+          </span>
         </header>
         <div className="flex-1 overflow-auto p-6">
           <div className="max-w-6xl mx-auto">

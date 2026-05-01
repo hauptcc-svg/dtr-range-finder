@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
@@ -170,4 +171,41 @@
 
 .stage-dot-pulse {
   animation: stage-pulse 600ms ease-out forwards;
+}
+
+/* ── Terminal Design System ─────────────────────────────────── */
+
+.terminal-card {
+  background: rgba(15, 15, 26, 0.8);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(99, 102, 241, 0.08);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.04), inset 0 1px 0 rgba(255,255,255,0.02);
+}
+
+.terminal-card-neon {
+  border-color: rgba(34, 197, 94, 0.3);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.08), inset 0 1px 0 rgba(255,255,255,0.02);
+}
+
+.bos-active {
+  animation: bos-glow 1.5s ease-in-out infinite;
+}
+
+.pnl-positive {
+  animation: pnl-pulse 2s ease-in-out infinite;
+}
+
+@keyframes bos-glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(34, 197, 94, 0.3); }
+  50%       { box-shadow: 0 0 16px rgba(34, 197, 94, 0.6), 0 0 32px rgba(34, 197, 94, 0.2); }
+}
+
+@keyframes pnl-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.75; }
+}
+
+@keyframes mode-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(99, 102, 241, 0.3); }
+  50%       { box-shadow: 0 0 20px rgba(99, 102, 241, 0.5); }
 }

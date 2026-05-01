@@ -1,16 +1,16 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { 
-  useGetAgentStatus, 
-  useGetInstruments, 
-  useStartAgent, 
+import {
+  useGetAgentStatus,
+  useGetInstruments,
+  useStartAgent,
   useStopAgent,
   useGetDailySummary,
   getGetAgentStatusQueryKey,
   getGetInstrumentsQueryKey,
   getGetDailySummaryQueryKey,
 } from "@workspace/api-client-react";
-import { Play, Square, Activity, AlertCircle, KeyRound, LogOut, Brain, CheckCircle, XCircle, Cpu, BarChart2, ShieldAlert, Lock, Zap } from "lucide-react";
+import { Play, Square, Activity, AlertCircle, KeyRound, LogOut, Brain, CheckCircle, XCircle, BarChart2, ShieldAlert, Lock, Zap, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,6 +18,9 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { InstrumentCard } from "@/components/instrument-card";
 import { PnlProgress } from "@/components/pnl-progress";
+import { AccountSelector } from "@/components/account-selector";
+import { EquityCurve } from "@/components/equity-curve";
+import { HermesReportModal, HermesReport } from "@/components/hermes-report-modal";
 import { formatSessionPhase, formatCurrency } from "@/lib/format";
 
 // ---------------------------------------------------------------------------
@@ -105,9 +108,22 @@ interface ClaudeResult {
   } | null;
 }
 
+// Extended agentStatus type additions
+interface AgentStatusExtended {
+  activeStrategy?: string;        // "DTR" | "XXX"
+  activeAccountId?: string;
+  availableAccounts?: Array<{ id: string; name: string; balance?: number }>;
+}
+
 export function Dashboard() {
   const queryClient = useQueryClient();
   const [claudeResult, setClaudeResult] = useState<ClaudeResult | null>(null);
+  const [activeAccountId, setActiveAccountId] = useState<string>("");
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportData, setReportData] = useState<HermesReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportPeriod, setReportPeriod] = useState<"7d" | "30d" | "all">("7d");
+  const [activeTimeframe, setActiveTimeframe] = useState<string>("1m");
 
   // Check whether the current browser session is authenticated
   const {
@@ -137,6 +153,12 @@ export function Dashboard() {
     query: { queryKey: getGetAgentStatusQueryKey(), refetchInterval: 3000 }
   });
 
+  // Sync activeAccountId from server status
+  useEffect(() => {
+    const extended = agentStatus as (typeof agentStatus & AgentStatusExtended) | undefined;
+    if (extended?.activeAccountId) setActiveAccountId(extended.activeAccountId);
+  }, [agentStatus]);
+
   const { data: instruments, isLoading: isLoadingInstruments } = useGetInstruments({
     query: { queryKey: getGetInstrumentsQueryKey(), refetchInterval: 3000 }
   });
@@ -165,20 +187,13 @@ export function Dashboard() {
     },
   });
 
-  const setMode = useMutation({
-    mutationFn: async (claudeAutonomous: boolean) => {
-      const res = await fetch("/api/agent/mode", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ claudeAutonomous }),
-      });
-      return res.json();
-    },
-    onSuccess: () => {
+  const switchMode = async (endpoint: string) => {
+    const res = await fetch(endpoint, { method: "POST", credentials: "include" });
+    const data = await res.json();
+    if (data.success) {
       queryClient.invalidateQueries({ queryKey: getGetAgentStatusQueryKey() });
-    },
-  });
+    }
+  };
 
   const handleStart = () => {
     startAgent.mutate(undefined, {
@@ -190,6 +205,47 @@ export function Dashboard() {
     stopAgent.mutate(undefined, {
       onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetAgentStatusQueryKey() }),
     });
+  };
+
+  const handleGenerateReport = async () => {
+    setReportData(null);
+    setReportLoading(true);
+    setReportOpen(true);
+    try {
+      const res = await fetch("/api/hermes/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ period: reportPeriod }),
+      });
+      const data = await res.json() as { success: boolean; report: HermesReport };
+      setReportData(data.success ? data.report : { error: "Report generation failed" });
+    } catch {
+      setReportData({ error: "Network error generating report" });
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const handleTimeframeSwitch = async (tf: string) => {
+    const ext = agentStatus as (typeof agentStatus & AgentStatusExtended);
+    const strategy = ext?.activeStrategy ?? "DTR";
+    try {
+      const res = await fetch(`/api/strategy/${strategy}/timeframe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ timeframe: tf }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setActiveTimeframe(tf);
+      } else {
+        console.warn("Timeframe switch failed:", data.error);
+      }
+    } catch (e) {
+      console.error("Timeframe switch error:", e);
+    }
   };
 
   if (isLoadingStatus || isLoadingInstruments || isLoadingSummary || isLoadingSession) {
@@ -271,42 +327,89 @@ export function Dashboard() {
                 </Button>
               </div>
 
-              {/* Trading Mode Selector */}
-              <div className="w-full border-t border-border pt-4 space-y-2">
-                <p className="text-[10px] font-mono uppercase text-muted-foreground tracking-widest mb-2">Trading Mode</p>
-                <div className="flex gap-2 w-full">
-                  <Button
-                    variant={!agentStatus.claudeAutonomousMode ? "default" : "outline"}
-                    size="sm"
-                    className={`flex-1 font-mono text-xs font-bold ${!agentStatus.claudeAutonomousMode ? "bg-primary text-primary-foreground" : "border-border text-muted-foreground"}`}
-                    disabled={!isAuthenticated || setMode.isPending || !agentStatus.claudeAutonomousMode}
-                    onClick={() => setMode.mutate(false)}
-                  >
-                    <BarChart2 className="w-3 h-3 mr-1" />
-                    DTR RULES
-                  </Button>
-                  <Button
-                    variant={agentStatus.claudeAutonomousMode ? "default" : "outline"}
-                    size="sm"
-                    className={`flex-1 font-mono text-xs font-bold ${agentStatus.claudeAutonomousMode ? "bg-primary text-primary-foreground animate-pulse" : "border-primary/50 text-primary"}`}
-                    disabled={!isAuthenticated || setMode.isPending || agentStatus.claudeAutonomousMode}
-                    onClick={() => setMode.mutate(true)}
-                  >
-                    <Cpu className="w-3 h-3 mr-1" />
-                    CLAUDE AI
-                  </Button>
-                </div>
-                {agentStatus.claudeAutonomousMode && (
-                  <div className="text-[10px] font-mono text-primary/80 bg-primary/10 rounded px-2 py-1">
-                    ⚡ Claude trading autonomously — DTR rules bypassed
-                    {agentStatus.lastClaudeAutonomousTick && (
-                      <span className="block text-muted-foreground mt-0.5">
+              {/* Trading Mode Selector — 2×2 grid */}
+              {(() => {
+                const ext = agentStatus as (typeof agentStatus & AgentStatusExtended);
+                const activeStrategy = ext?.activeStrategy ?? "";
+                const activeMode = (agentStatus as Record<string, unknown>)?.mode as string ?? (agentStatus.claudeAutonomousMode ? "CLAUDE+HERMES" : "DTR");
+                const sessionLabel = activeStrategy === "XXX"
+                  ? "London+NY (01:00–17:00)"
+                  : "2AM + 9AM (NY)";
+
+                return (
+                  <div className="w-full border-t border-border pt-4 space-y-2">
+                    <p className="text-[10px] font-mono uppercase text-muted-foreground tracking-widest mb-2">Trading Mode</p>
+                    <div className="grid grid-cols-2 gap-2 w-full">
+                      {/* DTR */}
+                      <button
+                        className={`h-[52px] font-mono font-bold text-sm rounded transition-colors
+                          ${activeStrategy === "DTR" && activeMode === "DTR"
+                            ? "bg-indigo-600 text-white"
+                            : "bg-card border border-border text-muted-foreground hover:border-indigo-500/50"
+                          } ${!isAuthenticated ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                        disabled={!isAuthenticated}
+                        onClick={() => switchMode("/api/mode/dtr")}
+                      >
+                        <div className="flex items-center justify-center gap-1">
+                          <BarChart2 className="w-3 h-3" />
+                          DTR
+                        </div>
+                      </button>
+
+                      {/* XXX */}
+                      <button
+                        className={`h-[52px] font-mono font-bold text-sm rounded transition-colors
+                          ${activeStrategy === "XXX"
+                            ? "bg-indigo-600 text-white"
+                            : "bg-card border border-border text-muted-foreground hover:border-indigo-500/50"
+                          } ${!isAuthenticated ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                        disabled={!isAuthenticated}
+                        onClick={() => switchMode("/api/mode/xxx")}
+                      >
+                        XXX
+                      </button>
+
+                      {/* AI MODE */}
+                      <button
+                        className={`h-[52px] font-mono font-bold text-sm rounded transition-colors
+                          ${activeMode === "CLAUDE+HERMES"
+                            ? "bg-primary text-primary-foreground animate-pulse"
+                            : "bg-card border border-border text-muted-foreground hover:border-primary/50"
+                          } ${!isAuthenticated ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                        disabled={!isAuthenticated}
+                        onClick={() => switchMode("/api/mode/claude")}
+                      >
+                        AI MODE
+                      </button>
+
+                      {/* HALT */}
+                      <button
+                        className={`h-[52px] font-mono font-bold text-sm rounded transition-colors
+                          ${activeMode === "HALT"
+                            ? "bg-destructive text-white"
+                            : "bg-card border border-border text-muted-foreground hover:border-destructive/50"
+                          } ${!isAuthenticated ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                        disabled={!isAuthenticated}
+                        onClick={() => switchMode("/api/mode/halt")}
+                      >
+                        HALT
+                      </button>
+                    </div>
+
+                    <p className="text-[10px] font-mono text-muted-foreground pt-1">
+                      Active: <span className="text-foreground">{activeStrategy || "—"}</span>
+                      {" — "}
+                      <span className="text-foreground">{sessionLabel}</span>
+                    </p>
+
+                    {agentStatus.claudeAutonomousMode && agentStatus.lastClaudeAutonomousTick && (
+                      <div className="text-[10px] font-mono text-primary/80 bg-primary/10 rounded px-2 py-1">
                         Last tick: {new Date(agentStatus.lastClaudeAutonomousTick).toLocaleTimeString()}
-                      </span>
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
 
               {/* Claude Trade Now */}
               <div className="w-full border-t border-border pt-4">
@@ -324,8 +427,10 @@ export function Dashboard() {
               
               <div className="w-full flex justify-between items-center border-t border-border pt-4">
                 <span className="text-xs font-mono text-muted-foreground uppercase tracking-wider block">Session Phase</span>
-                <span className={`font-mono font-bold px-3 py-1 rounded inline-block ${agentStatus.claudeAutonomousMode ? "text-primary bg-primary/10" : "text-primary bg-primary/10"}`}>
-                  {agentStatus.claudeAutonomousMode ? "CLAUDE AI" : formatSessionPhase(agentStatus.sessionPhase)}
+                <span className="font-mono font-bold px-3 py-1 rounded inline-block text-primary bg-primary/10">
+                  {agentStatus.claudeAutonomousMode
+                    ? "CLAUDE AI"
+                    : formatSessionPhase(agentStatus.sessionPhase)}
                 </span>
               </div>
 
@@ -342,6 +447,65 @@ export function Dashboard() {
                   </Button>
                 </div>
               )}
+
+              {/* Hermes Report Generator */}
+              <div className="w-full border-t border-border pt-4 space-y-2">
+                <p className="text-[10px] font-mono uppercase text-muted-foreground tracking-widest">Hermes Report</p>
+                <div className="flex gap-1">
+                  {(["7d", "30d", "all"] as const).map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setReportPeriod(p)}
+                      className={`h-6 min-w-[36px] px-1.5 font-mono text-[9px] font-bold rounded border transition-colors ${
+                        reportPeriod === p
+                          ? "bg-primary/20 border-primary text-primary"
+                          : "bg-card border-border text-muted-foreground hover:border-primary/50"
+                      }`}
+                    >
+                      {p.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full font-mono text-[10px] font-bold border-primary/30 text-primary hover:bg-primary/10"
+                  disabled={!isAuthenticated || reportLoading}
+                  onClick={handleGenerateReport}
+                >
+                  <Brain className="w-3 h-3 mr-1" />
+                  {reportLoading ? "GENERATING…" : "GENERATE REPORT"}
+                </Button>
+              </div>
+
+              {/* Timeframe Selector */}
+              <div className="w-full border-t border-border pt-4 space-y-2">
+                <p className="text-[10px] font-mono uppercase text-muted-foreground tracking-widest flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> Bar Timeframe
+                </p>
+                {(() => {
+                  const hasOpenTrades = ((agentStatus as Record<string, unknown>)?.open_trades as number ?? 0) > 0;
+                  return (
+                    <div className="flex gap-1">
+                      {(["1m", "5m", "15m"]).map((tf) => (
+                        <button
+                          key={tf}
+                          onClick={() => !hasOpenTrades && isAuthenticated && handleTimeframeSwitch(tf)}
+                          disabled={!isAuthenticated || hasOpenTrades}
+                          title={hasOpenTrades ? "Close open trades first" : `Switch to ${tf} bars`}
+                          className={`h-[32px] min-w-[44px] font-mono text-[10px] font-bold rounded border transition-colors ${
+                            activeTimeframe === tf
+                              ? "bg-indigo-600/30 border-indigo-500 text-indigo-300"
+                              : "bg-card border-border text-muted-foreground"
+                          } ${(!isAuthenticated || hasOpenTrades) ? "opacity-40 cursor-not-allowed" : "hover:border-indigo-500/50 cursor-pointer"}`}
+                        >
+                          {tf.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
             </CardContent>
           </Card>
 
@@ -388,6 +552,23 @@ export function Dashboard() {
           </Card>
 
         </div>
+
+        {/* Account Selector — only shown when multiple accounts are available */}
+        {(() => {
+          const ext = agentStatus as (typeof agentStatus & AgentStatusExtended);
+          if (!ext?.availableAccounts || ext.availableAccounts.length <= 1) return null;
+          return (
+            <AccountSelector
+              accounts={ext.availableAccounts}
+              activeAccountId={activeAccountId}
+              isAuthenticated={isAuthenticated}
+              onAccountChange={setActiveAccountId}
+            />
+          );
+        })()}
+
+        {/* Equity Curve */}
+        <EquityCurve />
 
         {agentStatus.errorMessage && (
           <Alert variant="destructive" className="bg-destructive/10 border-destructive/50 text-destructive font-mono text-sm rounded-md">
@@ -457,6 +638,13 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      <HermesReportModal
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        report={reportData}
+        isLoading={reportLoading}
+      />
     </>
   );
 }
