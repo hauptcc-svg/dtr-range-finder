@@ -21,11 +21,24 @@
 [x] Created .env.example, Procfile, runtime.txt for Railway deployment
 [x] Committed all Phase 1 + UI enhancements to git
 
+## 2026-05-02
+
+[x] Upgraded Supabase to Pro plan
+[x] Created Supabase project "dtr-trading" (URL: https://gphoaubbvimcetlehvmk.supabase.co)
+[x] Ran all 3 SQL migrations in Supabase SQL editor (001, 002, 003)
+[x] Collected all credentials: ProjectX, Anthropic, OpenRouter, Telegram, Supabase
+[x] Wrote .env file with all 11 env vars
+[x] Confirmed PROJECTX_BASE_URL is hardcoded in projectx_api.py — not needed in .env
+[x] Created Railway project "awake-respect" — connected dtr-range-finder GitHub repo
+[x] Set root directory to dtr-complete-final on Railway
+[x] Fixed Railway build failure: added custom start command (gunicorn -w 2 -b 0.0.0.0:$PORT flask_autonomous_trading:app)
+[x] Added all env vars to Railway Variables tab (pending FRONTEND_URL)
+
 ## Pending
-[ ] Upgrade Supabase to Pro plan — https://supabase.com/dashboard/org/hauptcc-6068/billing
-[ ] Create Supabase project "dtr-trading" — after Pro upgrade
-[ ] Run 3 SQL migrations in new project SQL editor
-[ ] Deploy Flask backend to Railway
-[ ] Deploy React frontend to Vercel
-[ ] Set all env vars on Railway + Vercel
+[ ] Confirm Railway Flask backend is live (redeploy in progress)
+[ ] Get Railway public URL once deploy succeeds
+[ ] Deploy React frontend to Vercel (root: artifacts/dtr-dashboard)
+[ ] Add VITE_API_URL=<railway-url> to Vercel env vars
+[ ] Add FRONTEND_URL=<vercel-url> back to Railway
+[ ] End-to-end smoke test: GET /health → GET /api/live/dashboard
 [ ] 2-week forward test: net positive P&L
