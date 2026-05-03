@@ -352,6 +352,137 @@ def telegram_callback():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Telegram webhook — inbound bot commands
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _tg_send(text: str) -> None:
+    """Fire-and-forget message to the configured chat."""
+    import urllib.request, json as _json
+    token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID",   "")
+    if not token or not chat_id:
+        return
+    payload = _json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML"}).encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as exc:
+        logger.warning(f"Telegram send failed: {exc}")
+
+
+@app.route("/api/telegram/webhook", methods=["POST"])
+def telegram_webhook():
+    """
+    Receives all incoming Telegram messages and inline callbacks.
+    Handles both /command messages and Hermes approve/reject callbacks.
+    """
+    data = request.json or {}
+
+    # ── Inline button callback (Hermes approve/reject) ──────────────────────
+    callback_query = data.get("callback_query", {})
+    if callback_query:
+        cb_data = callback_query.get("data", "")
+        parts = cb_data.split("_", 3)
+        if len(parts) >= 3:
+            action, symbol, param = parts[0], parts[1], parts[2]
+            if action == "APPROVE" and len(parts) == 4:
+                value = float(parts[3])
+                strategy = orchestrator.strategies.get(symbol)
+                if strategy:
+                    strategy.set_params({param: value})
+                    logger.info(f"✅ Telegram APPROVED: {symbol} {param} → {value}")
+            elif action == "REJECT":
+                logger.info(f"❌ Telegram REJECTED: {symbol} {param}")
+        return jsonify({"ok": True})
+
+    # ── Text commands ────────────────────────────────────────────────────────
+    message  = data.get("message", {})
+    chat_id  = str(message.get("chat", {}).get("id", ""))
+    text     = (message.get("text") or "").strip().lower().split()[0] if message.get("text") else ""
+
+    # Security: only respond to the configured chat
+    allowed_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if chat_id != allowed_chat:
+        return jsonify({"ok": True})
+
+    if text in ("/start", "/help"):
+        reply = (
+            "🤖 <b>DTR Trading Bot</b>\n\n"
+            "/status   — System status &amp; mode\n"
+            "/pnl      — Today's P&amp;L\n"
+            "/positions — Open positions\n"
+            "/halt     — Emergency halt\n"
+            "/resume   — Resume trading"
+        )
+
+    elif text == "/status":
+        state   = orchestrator.get_dashboard_state()
+        dm      = drawdown_monitor.status()
+        mode    = orchestrator.mode or "UNKNOWN"
+        running = "🟢 Running" if orchestrator.running and not orchestrator.halted else "🔴 Halted"
+        pnl     = state.get("daily_pnl", 0)
+        trades  = state.get("trade_count", 0)
+        phase   = state.get("session_phase", "—")
+        reply = (
+            f"<b>DTR Status</b>\n"
+            f"State: {running}\n"
+            f"Mode: {mode}\n"
+            f"Session: {phase}\n"
+            f"Daily P&amp;L: ${pnl:+.2f}\n"
+            f"Trades today: {trades}"
+        )
+
+    elif text == "/pnl":
+        state      = orchestrator.get_dashboard_state()
+        realized   = state.get("daily_pnl", 0)
+        unrealized = sum((p.get("live_pnl") or 0) for p in state.get("open_positions", []))
+        loss_limit = float(os.environ.get("DAILY_LOSS_LIMIT", 200))
+        target     = float(os.environ.get("DAILY_PROFIT_TARGET", 1400))
+        reply = (
+            f"<b>Today's P&amp;L</b>\n"
+            f"Realized:   ${realized:+.2f}\n"
+            f"Unrealized: ${unrealized:+.2f}\n"
+            f"─────────────\n"
+            f"Target: ${target:.0f}  |  Limit: -${loss_limit:.0f}"
+        )
+
+    elif text == "/positions":
+        positions = state = orchestrator.get_dashboard_state().get("open_positions", [])
+        if not positions:
+            reply = "📭 No open positions"
+        else:
+            lines = ["<b>Open Positions</b>"]
+            for p in positions:
+                sym  = p.get("symbol", "?")
+                dire = (p.get("direction") or "?").upper()
+                qty  = p.get("qty_remaining", 1)
+                entry = p.get("entry_price", 0)
+                pnl  = p.get("live_pnl") or 0
+                arrow = "🟢" if pnl >= 0 else "🔴"
+                lines.append(f"{arrow} {sym} {dire} x{qty}  entry {entry:.2f}  P&amp;L ${pnl:+.2f}")
+            reply = "\n".join(lines)
+
+    elif text == "/halt":
+        orchestrator.set_mode("HALT")
+        logger.info("🛑 Trading HALTED via Telegram command")
+        reply = "🛑 <b>Trading halted.</b> Send /resume to restart."
+
+    elif text == "/resume":
+        orchestrator.resume_from_halt()
+        reply = f"✅ <b>Trading resumed.</b> Mode: {orchestrator.mode}"
+
+    else:
+        reply = "Unknown command. Send /help for a list of commands."
+
+    _tg_send(reply)
+    return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Account management
 # ─────────────────────────────────────────────────────────────────────────────
 
