@@ -232,7 +232,7 @@ class MarketDataOrchestrator:
         # ── ProjectX API ───────────────────────────────────────────────────
         self.api = ProjectXAPI(
             username=os.environ["PROJECTX_USERNAME"],
-            password=os.environ["PROJECTX_PASSWORD"],
+            api_key=os.environ["PROJECTX_API_KEY"],
             account_id=os.environ.get("PROJECTX_ACCOUNT_ID", ""),
         )
         connected = await self.api.connect()

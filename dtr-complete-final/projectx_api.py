@@ -19,16 +19,12 @@ class ProjectXAPI:
     def __init__(
         self,
         username: str,
-        password: str,
+        api_key: str,
         account_id: str
     ):
         self.username = username
-        self.password = password
+        self.api_key = api_key
         self.account_id = account_id
-        self.app_id = os.environ.get("PROJECTX_APP_ID", "")
-        self.app_version = os.environ.get("PROJECTX_APP_VERSION", "1.0.0")
-        self.cid = int(os.environ.get("PROJECTX_CID", "0"))
-        self.device_id = os.environ.get("PROJECTX_DEVICE_ID", "dtr-trading-agent-v1")
 
         self.base_url = os.environ.get("PROJECTX_BASE_URL", "https://api.topstepx.com").rstrip("/")
         self.session: Optional[aiohttp.ClientSession] = None
@@ -50,15 +46,11 @@ class ProjectXAPI:
 
             auth_data = {
                 "userName": self.username,
-                "password": self.password,
-                "appId": self.app_id,
-                "appVersion": self.app_version,
-                "cid": self.cid,
-                "deviceId": self.device_id,
+                "apiKey": self.api_key,
             }
 
             async with self.session.post(
-                f"{self.base_url}/api/Auth/signIn",
+                f"{self.base_url}/api/Auth/loginKey",
                 json=auth_data,
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
