@@ -930,6 +930,11 @@ def update_agent_settings():
         orchestrator.set_mode(data["mode"])
     if "active_strategy" in data:
         orchestrator.set_active_strategy(data["active_strategy"])
+    if "instrument_qty" in data:
+        from multi_instrument_config import MULTI_INSTRUMENT_CONFIG as _cfg
+        for sym, qty in data["instrument_qty"].items():
+            if sym in _cfg and isinstance(qty, int) and 1 <= qty <= 50:
+                _cfg[sym]["qty"] = qty
     return jsonify({"success": True, "message": "Settings updated"})
 
 
@@ -1005,6 +1010,62 @@ def get_orders():
     except Exception as exc:
         logger.error(f"❌ get_orders error: {exc}")
         return jsonify({})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Manual order placement (POST /api/agent/manual-order)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/manual-order", methods=["POST"])
+def manual_order():
+    import asyncio as _asyncio
+
+    data = request.get_json() or {}
+    symbol   = data.get("symbol")
+    side     = data.get("side", "").upper()
+    try:
+        quantity = int(data.get("quantity", 1))
+    except (ValueError, TypeError):
+        quantity = 1
+
+    if not symbol or side not in ("BUY", "SELL"):
+        return jsonify({"success": False, "error": "symbol and side (BUY|SELL) required"}), 400
+    if quantity < 1 or quantity > 50:
+        return jsonify({"success": False, "error": "quantity must be 1–50"}), 400
+
+    if orchestrator.api is None:
+        return jsonify({"success": False, "error": "Not connected to broker"}), 503
+
+    # Look up contract_id from orchestrator instruments
+    instr = orchestrator.instruments.get(symbol)
+    if not instr:
+        return jsonify({"success": False, "error": f"Unknown instrument: {symbol}"}), 404
+
+    contract_id = getattr(instr, "contract_id", None) or getattr(instr, "contractId", None)
+    if not contract_id:
+        return jsonify({"success": False, "error": f"No contractId for {symbol}"}), 500
+
+    loop = getattr(orchestrator, "_loop", None)
+    try:
+        if loop and loop.is_running():
+            future = _asyncio.run_coroutine_threadsafe(
+                orchestrator.api.place_order(contract_id, side, quantity, "MARKET", comment="manual"),
+                loop,
+            )
+            result = future.result(timeout=10)
+        else:
+            new_loop = _asyncio.new_event_loop()
+            result = new_loop.run_until_complete(
+                orchestrator.api.place_order(contract_id, side, quantity, "MARKET", comment="manual")
+            )
+            new_loop.close()
+    except Exception as exc:
+        logger.error(f"❌ manual_order error: {exc}")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    if result:
+        return jsonify({"success": True, "message": f"{side} {quantity} {symbol} placed"})
+    return jsonify({"success": False, "error": "Order placement failed"}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────────

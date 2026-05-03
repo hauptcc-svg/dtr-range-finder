@@ -7,6 +7,75 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { getGetInstrumentsQueryKey } from "@workspace/api-client-react";
 
+// ─── ManualTradeWidget ───────────────────────────────────────────────────────
+
+function ManualTradeWidget({ symbol }: { symbol: string }) {
+  const [qty, setQty] = useState(1);
+  const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [pending, setPending] = useState<"BUY" | "SELL" | null>(null);
+
+  const placeOrder = async (side: "BUY" | "SELL") => {
+    setPending(side);
+    setStatus(null);
+    try {
+      const res = await fetch("/api/agent/manual-order", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, side, quantity: qty }),
+      });
+      const data = await res.json() as { success: boolean; message?: string; error?: string };
+      setStatus({ ok: data.success, msg: data.message ?? data.error ?? "Done" });
+    } catch {
+      setStatus({ ok: false, msg: "Network error" });
+    } finally {
+      setPending(null);
+      setTimeout(() => setStatus(null), 4000);
+    }
+  };
+
+  return (
+    <div className="border-t border-border/40 pt-3 mt-1">
+      <p className="text-[9px] font-mono uppercase text-muted-foreground tracking-widest mb-2">Manual Trade</p>
+      <div className="flex items-center gap-2">
+        {/* Qty selector */}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setQty(q => Math.max(1, q - 1))}
+            className="w-6 h-6 rounded border border-border text-muted-foreground hover:text-foreground hover:border-foreground/40 font-mono text-sm transition-colors flex items-center justify-center"
+          >−</button>
+          <span className="w-6 text-center font-mono font-bold text-sm">{qty}</span>
+          <button
+            onClick={() => setQty(q => Math.min(10, q + 1))}
+            className="w-6 h-6 rounded border border-border text-muted-foreground hover:text-foreground hover:border-foreground/40 font-mono text-sm transition-colors flex items-center justify-center"
+          >+</button>
+        </div>
+        {/* BUY */}
+        <button
+          onClick={() => placeOrder("BUY")}
+          disabled={pending !== null}
+          className="flex-1 h-8 rounded font-mono font-bold text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {pending === "BUY" ? "…" : "▲ BUY"}
+        </button>
+        {/* SELL */}
+        <button
+          onClick={() => placeOrder("SELL")}
+          disabled={pending !== null}
+          className="flex-1 h-8 rounded font-mono font-bold text-[11px] bg-rose-600 hover:bg-rose-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {pending === "SELL" ? "…" : "▼ SELL"}
+        </button>
+      </div>
+      {status && (
+        <p className={cn("text-[10px] font-mono mt-1.5 leading-tight", status.ok ? "text-success" : "text-destructive")}>
+          {status.ok ? "✓" : "✗"} {status.msg}
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface InstrumentCardProps {
   instrument: InstrumentStatus;
   isAuthenticated: boolean;
@@ -331,6 +400,9 @@ export function InstrumentCard({ instrument, isAuthenticated }: InstrumentCardPr
             <div className="text-foreground text-xs">{instrument.shortLosses}</div>
           </div>
         </div>
+
+        {/* Manual Trade */}
+        {isAuthenticated && <ManualTradeWidget symbol={instrument.symbol} />}
       </CardContent>
     </Card>
   );

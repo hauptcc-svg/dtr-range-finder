@@ -10,6 +10,7 @@ import { Layout } from "@/components/layout";
 import { Dashboard } from "@/pages/dashboard";
 import { Trades } from "@/pages/trades";
 import { Positions } from "@/pages/positions";
+import { Analytics } from "@/pages/analytics";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,6 +37,7 @@ function Router() {
       <BaseRedirect />
       <Switch>
         <Route path="/" component={Dashboard} />
+        <Route path="/analytics" component={Analytics} />
         <Route path="/trades" component={Trades} />
         <Route path="/positions" component={Positions} />
         <Route component={NotFound} />
