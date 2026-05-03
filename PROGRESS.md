@@ -45,9 +45,19 @@
     - Root: artifacts/dtr-dashboard | Build: pnpm build | Output: dist/public
     - VITE_API_URL = https://dtr-range-finder-production.up.railway.app
 
-## Pending
+## 2026-05-03 (session 2)
 
-[ ] Add FRONTEND_URL=https://project-wonf5.vercel.app to Railway Variables
-[ ] Smoke test dashboard: open Vercel URL, confirm live data loads
-[ ] Verify Telegram bot sends notifications
-[ ] Activate DTR strategy (POST /api/mode/dtr) and begin 2-week forward test
+[x] Full UI overhaul — account stats bar (Balance, Drawdown, RP&L, UP&L)
+[x] Open Trades inline on dashboard with CLOSE buttons, live 3s polling
+[x] Analytics page (/analytics) — Daily Target Progress + Hermes Report generator
+[x] ManualTradeWidget on each instrument card (qty ±1–10, BUY/SELL buttons)
+[x] Contracts-per-instrument section in Risk Controls (saved to MULTI_INSTRUMENT_CONFIG)
+[x] POST /api/agent/manual-order endpoint for manual market orders
+[x] Dashboard restructure: AccountStatsBar → (SystemStatus + OpenTrades) → RiskControls → Instruments → EquityCurve
+[x] Analytics route wired (/analytics), Positions removed from primary nav
+[x] Inter font system — replaced Space Mono across all 277 usages, --app-font-data keeps JetBrains Mono for numeric displays
+[x] Mobile responsive: overflow-x-hidden, tables hide non-essential columns on mobile
+[x] Mobile bottom navigation bar (Dashboard / Analytics / Trade History)
+[x] Telegram bot commands: /status /pnl /positions /halt /resume
+[x] Registered Telegram webhook at https://dtr-range-finder-production.up.railway.app/api/telegram/webhook
+[x] Confirmed Telegram connectivity (test message delivered to @cchaos21)

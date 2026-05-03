@@ -22,12 +22,15 @@ dtr-complete-final/         — Python backend
   hermes_brain.py
   drawdown_monitor.py
 artifacts/dtr-dashboard/    — React frontend
-  src/pages/dashboard.tsx
+  src/pages/dashboard.tsx   — main dashboard (account stats, open trades, risk controls)
+  src/pages/analytics.tsx   — Daily Target Progress + Hermes Report (NEW)
   src/pages/positions.tsx
+  src/pages/trades.tsx
   src/components/equity-curve.tsx
   src/components/hermes-report-modal.tsx
-  src/components/instrument-card.tsx
-  src/components/layout.tsx
+  src/components/instrument-card.tsx  — includes ManualTradeWidget
+  src/components/layout.tsx           — sidebar + mobile bottom nav
+  src/index.css                       — Inter font, stat-pill, section-header utilities
 supabase/migrations/        — SQL migrations (run in order)
 ```
 
@@ -60,9 +63,15 @@ PORT=5000
 - **pnpm workspace** — Windows native binaries required: `@rollup/rollup-win32-x64-msvc`, `@esbuild/win32-x64@0.27.3`, `lightningcss-win32-x64-msvc@1.31.1`
 - **Build for Vercel**: use `BASE_PATH=/dtr-dashboard` in Vite config for production deploy
 - **Build for local preview**: use `BASE_PATH=/` to avoid blank page
-- **Terminal UI design system**: JetBrains Mono font, `.terminal-card` CSS class (backdrop-blur, rgba dark bg), neon green BOS glow (`bos-active` animation)
+- **Font system**: Inter is the primary font (both `--app-font-sans` and `--app-font-mono` map to Inter). JetBrains Mono available as `--app-font-data` for numeric displays only. All 277 `font-mono` class usages render Inter — do NOT change `--app-font-mono` back to a monospace font.
 - **ProjectX auth**: endpoint is `POST /api/Auth/loginKey` with `{ userName, apiKey }` — NOT `/api/Auth/signIn` with password+appId fields. Only PROJECTX_USERNAME + PROJECTX_API_KEY + PROJECTX_ACCOUNT_ID needed.
 - **Dashboard mode control**: DTR / XXX / AI MODE / HALT buttons are on the dashboard UI — no manual API calls needed to switch strategy
+- **Telegram bot**: token `8396207281:AAEa...` (in `.env`). Webhook registered at `https://dtr-range-finder-production.up.railway.app/api/telegram/webhook`. Old `.replit` token is expired — do not use. Chat ID `332762243` = Craig's personal Telegram user ID (@cchaos21). Bot commands: /status /pnl /positions /halt /resume.
+- **Manual order endpoint**: `POST /api/agent/manual-order` — body `{ symbol, side: "BUY"|"SELL", quantity }`. Looks up `contract_id` from `orchestrator.instruments`. Requires auth cookie.
+- **Per-instrument qty**: stored in `MULTI_INSTRUMENT_CONFIG[sym]["qty"]`. Updated via `POST /api/agent/settings` with `{ instrument_qty: { MNQM26: 2, ... } }`. Values clamped 1–50.
+- **Analytics page**: `/analytics` route — Daily Target Progress + Hermes Report generator (inline, not modal). Period selector 7D/30D/ALL.
+- **Open Trades inline**: `OpenTradesInline` component on dashboard, polls `useGetPositions` every 3s. CLOSE button calls `useClosePosition`. Table hides SIZE/ENTRY/CURRENT on mobile (`hidden sm:table-cell`).
+- **Mobile nav**: Fixed bottom nav bar on mobile (`md:hidden`), 64px tall. Sidebar hidden on mobile. Content area uses `pb-20` to avoid overlap.
 
 ## API Endpoints (Flask)
 | Method | Path | Description |
@@ -76,6 +85,9 @@ PORT=5000
 | POST | /api/mode/dtr | Activate DTR strategy |
 | POST | /api/mode/xxx | Activate XXX strategy |
 | POST | /api/mode/halt | Halt trading |
+| POST | /api/agent/manual-order | Place manual order `{ symbol, side, quantity }` |
+| POST | /api/agent/settings | Update settings incl. `instrument_qty` per symbol |
+| POST | /api/telegram/webhook | Telegram inbound commands + Hermes callbacks |
 
 ## Deployment
 - **Backend (Railway):** `Procfile` → `web: gunicorn -w 2 -b 0.0.0.0:$PORT "dtr-complete-final.flask_autonomous_trading:app"`
