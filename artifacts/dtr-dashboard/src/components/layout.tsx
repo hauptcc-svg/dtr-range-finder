@@ -21,7 +21,7 @@ export function Layout({ children }: LayoutProps) {
       <aside className="w-60 border-r border-border bg-sidebar flex flex-col hidden md:flex shrink-0">
         <div className="h-14 flex items-center px-4 border-b border-border gap-2.5">
           <Activity className="w-4 h-4 text-primary shrink-0" />
-          <span className="font-bold tracking-tight text-xs font-mono">DTR TRADING PLATFORM</span>
+          <span className="font-semibold text-xs tracking-tight">DTR TRADING PLATFORM</span>
         </div>
 
         <nav className="flex-1 py-3 flex flex-col gap-0.5 px-2">
@@ -38,7 +38,7 @@ export function Layout({ children }: LayoutProps) {
                   )}
                 >
                   <item.icon className={cn("w-4 h-4 mr-3 shrink-0", isActive ? "text-primary" : "opacity-60")} />
-                  <span className="font-mono text-xs tracking-wide">{item.label}</span>
+                  <span className="text-sm font-medium">{item.label}</span>
                 </div>
               </Link>
             );
@@ -50,7 +50,7 @@ export function Layout({ children }: LayoutProps) {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
           </span>
-          <span className="text-[9px] font-mono text-green-500/70 uppercase tracking-widest">Live</span>
+          <span className="text-[10px] font-medium text-green-500/70 uppercase tracking-wide">Live</span>
         </div>
       </aside>
 
@@ -59,13 +59,13 @@ export function Layout({ children }: LayoutProps) {
         {/* Mobile header */}
         <header className="h-14 border-b border-border flex items-center px-4 md:hidden gap-2.5">
           <Activity className="w-4 h-4 text-primary" />
-          <span className="font-bold tracking-tight text-xs font-mono">DTR TRADING PLATFORM</span>
+          <span className="font-semibold text-xs tracking-tight">DTR TRADING PLATFORM</span>
           <span className="ml-auto flex items-center gap-1.5">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
             </span>
-            <span className="text-[9px] font-mono text-green-500/70 uppercase tracking-widest">Live</span>
+            <span className="text-[10px] font-medium text-green-500/70 uppercase tracking-wide">Live</span>
           </span>
         </header>
 
