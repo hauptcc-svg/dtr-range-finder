@@ -69,11 +69,34 @@ export function Layout({ children }: LayoutProps) {
           </span>
         </header>
 
-        <div className="flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5">
+        <div className="flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5 pb-20 md:pb-5">
           <div className="max-w-6xl mx-auto min-w-0">
             {children}
           </div>
         </div>
+
+        {/* Mobile bottom nav */}
+        <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden bg-sidebar border-t border-border">
+          <div className="flex items-stretch h-16">
+            {navItems.map((item) => {
+              const isActive = location === item.href;
+              return (
+                <Link key={item.href} href={item.href} className="flex-1">
+                  <div className={cn(
+                    "flex flex-col items-center justify-center h-full gap-1 transition-colors",
+                    isActive ? "text-primary" : "text-muted-foreground"
+                  )}>
+                    <item.icon className={cn("w-5 h-5", isActive ? "text-primary" : "opacity-50")} />
+                    <span className="text-[10px] font-medium">{item.label}</span>
+                    {isActive && (
+                      <span className="absolute bottom-0 w-1/3 h-0.5 bg-primary rounded-t-full" />
+                    )}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </nav>
       </main>
     </div>
   );
