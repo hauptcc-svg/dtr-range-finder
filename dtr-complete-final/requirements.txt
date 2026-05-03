@@ -1,5 +1,19 @@
-aiohttp==3.9.1
+# Web framework
+flask==3.0.3
+flask-cors==4.0.1
+gunicorn==22.0.0
+
+# Async HTTP
+aiohttp==3.9.5
+
+# AI
+anthropic==0.34.2
+
+# Database
+supabase==2.7.4
+
+# Utilities
 python-dateutil==2.8.2
-pytz==2023.3
 python-dotenv==1.0.0
+pytz==2024.1
 requests==2.31.0

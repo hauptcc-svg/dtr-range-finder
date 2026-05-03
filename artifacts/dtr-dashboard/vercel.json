@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://dtr-range-finder-production.up.railway.app/api/:path*"
+    },
+    {
+      "source": "/health",
+      "destination": "https://dtr-range-finder-production.up.railway.app/health"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

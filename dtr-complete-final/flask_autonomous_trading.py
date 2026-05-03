@@ -554,6 +554,481 @@ def health():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Session management (HttpOnly cookie auth for React dashboard)
+# AGENT_CONTROL_SECRET env var — set once in Railway, enter in dashboard UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+import secrets as _secrets
+from functools import wraps
+from flask import session as _flask_session
+
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", _secrets.token_hex(24))
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+app.config["SESSION_COOKIE_SECURE"] = True
+
+_AGENT_SECRET = os.environ.get("AGENT_CONTROL_SECRET", "")
+
+
+@app.route("/api/agent/session", methods=["GET"])
+def get_agent_session():
+    if _flask_session.get("authenticated"):
+        return jsonify({"authenticated": True})
+    return jsonify({"authenticated": False}), 401
+
+
+@app.route("/api/agent/session", methods=["POST"])
+def create_agent_session():
+    key = request.headers.get("x-agent-key", "")
+    if not _AGENT_SECRET:
+        return jsonify({"error": "AGENT_CONTROL_SECRET not configured on server"}), 503
+    if not key or key != _AGENT_SECRET:
+        return jsonify({"error": "Invalid agent key"}), 401
+    _flask_session["authenticated"] = True
+    return jsonify({"authenticated": True})
+
+
+@app.route("/api/agent/session", methods=["DELETE"])
+def delete_agent_session():
+    _flask_session.clear()
+    return jsonify({"authenticated": False})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Health (openapi compat — /api/healthz)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/healthz")
+def healthz():
+    return jsonify({"status": "ok"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent status (openapi: GET /api/agent/status)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/status")
+def agent_status():
+    from zoneinfo import ZoneInfo
+    state = orchestrator.get_dashboard_state()
+    dm = drawdown_monitor.status()
+
+    now_ny = datetime.now(ZoneInfo("America/New_York"))
+    hm = now_ny.hour * 60 + now_ny.minute
+
+    if not orchestrator.running or orchestrator.halted or orchestrator.mode == "HALT":
+        phase = "daily_limit_hit" if dm.get("daily_loss_hit") else "idle"
+    elif 72 <= hm < 75:
+        phase = "london_range"
+    elif 75 <= hm < 150:
+        phase = "london_entry"
+    elif 540 <= hm < 555:
+        phase = "ny_range"
+    elif 555 <= hm < 630:
+        phase = "ny_entry"
+    else:
+        phase = "eod_flat"
+
+    unrealized = sum((p.get("live_pnl") or 0) for p in state.get("open_positions", []))
+
+    return jsonify({
+        "running":                   orchestrator.running,
+        "sessionPhase":              phase,
+        "dailyPnl":                  state.get("daily_pnl", 0),
+        "unrealizedPnl":             round(unrealized, 2),
+        "dailyLossLimit":            float(os.environ.get("DAILY_LOSS_LIMIT", 200)),
+        "dailyProfitTarget":         float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+        "tradeCount":                state.get("trade_count", 0),
+        "lastUpdated":               state.get("timestamp", datetime.now(timezone.utc).isoformat()),
+        "authenticatedWithProjectX": (orchestrator.api is not None and not orchestrator.halted),
+        "errorMessage":              orchestrator.halt_reason if orchestrator.halted else None,
+        "claudeAutonomousMode":      orchestrator.mode == "CLAUDE+HERMES",
+        "lastClaudeAutonomousTick":  None,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Instruments (openapi: GET /api/agent/instruments)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/instruments")
+def agent_instruments():
+    from multi_instrument_config import MULTI_INSTRUMENT_CONFIG as _cfg
+    state = orchestrator.get_dashboard_state()
+    instruments_raw = state.get("instruments", {})
+
+    result = []
+    for symbol, snap in instruments_raw.items():
+        trade = snap.get("trade")
+        in_trade = snap.get("in_trade", False)
+
+        sym_trades = [t for t in orchestrator.daily_trades if t.get("symbol") == symbol]
+        today_pnl = sum((t.get("pnl") or 0) for t in sym_trades)
+        long_losses  = sum(1 for t in sym_trades if (t.get("outcome","")).startswith("LOSS") and (t.get("direction","")).upper() == "LONG")
+        short_losses = sum(1 for t in sym_trades if (t.get("outcome","")).startswith("LOSS") and (t.get("direction","")).upper() == "SHORT")
+
+        stage = snap.get("stage", 0)
+        direction = (snap.get("direction") or "").upper()
+        rbs = {
+            "shortStage":      stage if direction == "SHORT" else 0,
+            "longStage":       stage if direction == "LONG"  else 0,
+            "shortPending":    bool(snap.get("bos_confirmed") and direction == "SHORT"),
+            "longPending":     bool(snap.get("bos_confirmed") and direction == "LONG"),
+            "shortSignalFired": False,
+            "longSignalFired":  False,
+        }
+
+        d = (trade or {}).get("direction", "")
+        result.append({
+            "symbol":        symbol,
+            "name":          snap.get("name", symbol),
+            "enabled":       _cfg.get(symbol, {}).get("enabled", True),
+            "position":      ("long" if d.upper() == "LONG" else "short") if in_trade else None,
+            "positionSize":  (trade or {}).get("qty_remaining", (trade or {}).get("qty", 0)) if in_trade else 0,
+            "entryPrice":    (trade or {}).get("entry_price") if in_trade else None,
+            "unrealizedPnl": (trade or {}).get("live_pnl") if in_trade else None,
+            "todayPnl":      round(today_pnl, 2),
+            "todayTrades":   len(sym_trades),
+            "longLosses":    long_losses,
+            "shortLosses":   short_losses,
+            "rangeHigh":     snap.get("range_high"),
+            "rangeLow":      snap.get("range_low"),
+            "lastPrice":     snap.get("last_price"),
+            "rbsLondon":     rbs,
+            "rbsNy":         None,
+        })
+
+    return jsonify(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent start / stop (openapi)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/start", methods=["POST"])
+def agent_start():
+    orchestrator.set_mode("DTR")
+    return jsonify({"success": True, "message": "Trading agent started (DTR mode)"})
+
+
+@app.route("/api/agent/stop", methods=["POST"])
+def agent_stop():
+    orchestrator.set_mode("HALT")
+    return jsonify({"success": True, "message": "Trading agent halted"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Trades (openapi: GET /api/trades + PATCH /api/trades/<id>/notes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/trades")
+def get_trades():
+    page        = int(request.args.get("page", 1))
+    page_size   = min(int(request.args.get("pageSize", 20)), 100)
+    instrument  = request.args.get("instrument")
+    date_filter = request.args.get("date")
+    offset      = (page - 1) * page_size
+
+    supabase = orchestrator._supabase
+    if not supabase:
+        empty_stats = {"totalClosed": 0, "winCount": 0, "lossCount": 0, "totalWinPnl": 0.0, "totalLossPnl": 0.0}
+        return jsonify({"trades": [], "total": 0, "page": page, "pageSize": page_size, "stats": empty_stats})
+
+    try:
+        q = supabase.table("trades").select("*", count="exact").order("opened_at", desc=True)
+        if instrument:
+            q = q.eq("symbol", instrument)
+        if date_filter:
+            q = q.gte("opened_at", f"{date_filter}T00:00:00").lte("opened_at", f"{date_filter}T23:59:59")
+        count_resp = q.execute()
+        total = count_resp.count or len(count_resp.data or [])
+
+        q2 = supabase.table("trades").select("*").order("opened_at", desc=True).range(offset, offset + page_size - 1)
+        if instrument:
+            q2 = q2.eq("symbol", instrument)
+        if date_filter:
+            q2 = q2.gte("opened_at", f"{date_filter}T00:00:00").lte("opened_at", f"{date_filter}T23:59:59")
+        trades_raw = q2.execute().data or []
+
+        def _map_trade(t):
+            d = (t.get("direction") or "").upper()
+            session = (t.get("session") or "london").lower()
+            return {
+                "id":         t.get("id") or 0,
+                "instrument": t.get("symbol", ""),
+                "direction":  "long" if d == "LONG" else "short",
+                "entryPrice": t.get("entry_price", 0),
+                "exitPrice":  t.get("exit_price"),
+                "qty":        t.get("qty", 1),
+                "pnl":        t.get("pnl"),
+                "session":    session if session in ("london", "ny") else "london",
+                "status":     "closed" if t.get("exit_price") is not None else "open",
+                "entryTime":  t.get("opened_at", ""),
+                "exitTime":   t.get("closed_at"),
+                "stopPrice":  t.get("sl_level"),
+                "tp1Price":   t.get("tp1_level"),
+                "tp2Price":   t.get("tp2_level"),
+                "notes":      t.get("notes"),
+            }
+
+        trades = [_map_trade(t) for t in trades_raw]
+        closed = [t for t in trades if t["status"] == "closed"]
+        wins   = [t for t in closed if (t.get("pnl") or 0) > 0]
+        losses = [t for t in closed if (t.get("pnl") or 0) < 0]
+
+        return jsonify({
+            "trades":   trades,
+            "total":    total,
+            "page":     page,
+            "pageSize": page_size,
+            "stats": {
+                "totalClosed": len(closed),
+                "winCount":    len(wins),
+                "lossCount":   len(losses),
+                "totalWinPnl":  round(sum((t.get("pnl") or 0) for t in wins), 2),
+                "totalLossPnl": round(sum((t.get("pnl") or 0) for t in losses), 2),
+            },
+        })
+    except Exception as exc:
+        logger.error(f"❌ get_trades error: {exc}")
+        empty_stats = {"totalClosed": 0, "winCount": 0, "lossCount": 0, "totalWinPnl": 0.0, "totalLossPnl": 0.0}
+        return jsonify({"trades": [], "total": 0, "page": page, "pageSize": page_size, "stats": empty_stats})
+
+
+@app.route("/api/trades/<int:trade_id>/notes", methods=["PATCH"])
+def update_trade_notes(trade_id: int):
+    data = request.get_json() or {}
+    supabase = orchestrator._supabase
+    if not supabase:
+        return jsonify({"success": False, "message": "Supabase not connected"})
+    try:
+        supabase.table("trades").update({"notes": data.get("notes")}).eq("id", trade_id).execute()
+        return jsonify({"success": True, "message": "Notes updated"})
+    except Exception as exc:
+        logger.error(f"❌ update_trade_notes error: {exc}")
+        return jsonify({"success": False, "message": str(exc)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Positions (openapi: GET /api/positions + POST /api/positions/<symbol>/close)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/positions")
+def get_positions():
+    state = orchestrator.get_dashboard_state()
+    instruments_raw = state.get("instruments", {})
+
+    positions = []
+    for p in state.get("open_positions", []):
+        sym = p.get("symbol", "")
+        inst = instruments_raw.get(sym, {})
+        d = (p.get("direction") or "").upper()
+        positions.append({
+            "instrument":    sym,
+            "direction":     "long" if d == "LONG" else "short",
+            "size":          p.get("qty_remaining", 1),
+            "entryPrice":    p.get("entry_price", 0),
+            "currentPrice":  inst.get("last_price") or p.get("entry_price", 0),
+            "unrealizedPnl": p.get("live_pnl") or 0,
+            "openedAt":      p.get("entry_time", datetime.now(timezone.utc).isoformat()),
+            "stopPrice":     p.get("sl_level"),
+            "tp1Price":      p.get("tp1_level"),
+            "tp2Price":      p.get("tp2_level"),
+        })
+
+    return jsonify(positions)
+
+
+@app.route("/api/positions/<symbol>/close", methods=["POST"])
+def close_position(symbol: str):
+    import asyncio as _asyncio
+
+    if symbol not in orchestrator.open_trades:
+        return jsonify({"success": False, "message": f"No open position for {symbol}"}), 404
+
+    loop = getattr(orchestrator, "_loop", None)
+    if loop is None or not loop.is_running():
+        return jsonify({"success": False, "message": "Orchestrator not ready"}), 503
+
+    trade = orchestrator.open_trades.get(symbol, {})
+    future = _asyncio.run_coroutine_threadsafe(
+        orchestrator._early_close_trade(symbol, trade, "manual_close"),
+        loop,
+    )
+    try:
+        future.result(timeout=10)
+        return jsonify({"success": True, "message": f"Position {symbol} closed"})
+    except Exception as exc:
+        logger.error(f"❌ close_position error: {exc}")
+        return jsonify({"success": False, "message": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Daily summary (openapi: GET /api/agent/daily-summary)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/daily-summary")
+def agent_daily_summary():
+    state = orchestrator.get_dashboard_state()
+    dm = drawdown_monitor.status()
+    trades = orchestrator.daily_trades
+
+    wins   = [t for t in trades if (t.get("outcome") or "").startswith("WIN")]
+    losses = [t for t in trades if (t.get("outcome") or "").startswith("LOSS")]
+    london_pnl = sum((t.get("pnl") or 0) for t in trades if (t.get("session") or "").upper() == "LONDON")
+    ny_pnl     = sum((t.get("pnl") or 0) for t in trades if (t.get("session") or "").upper() == "NY")
+
+    if dm.get("daily_loss_hit"):
+        status = "loss_limit_hit"
+    elif dm.get("daily_profit_hit"):
+        status = "profit_target_hit"
+    elif not orchestrator.running or orchestrator.halted:
+        status = "ended"
+    else:
+        status = "active"
+
+    return jsonify({
+        "date":       datetime.now(timezone.utc).date().isoformat(),
+        "totalPnl":   state.get("daily_pnl", 0),
+        "tradeCount": state.get("trade_count", 0),
+        "winCount":   len(wins),
+        "lossCount":  len(losses),
+        "status":     status,
+        "londonPnl":  round(london_pnl, 2),
+        "nyPnl":      round(ny_pnl, 2),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Settings (GET + POST /api/agent/settings)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/settings", methods=["GET"])
+def get_agent_settings():
+    from multi_instrument_config import MULTI_INSTRUMENT_CONFIG as _cfg
+    instruments_cfg = {}
+    for sym, strategy in orchestrator.strategies.items():
+        instruments_cfg[sym] = {
+            "enabled": _cfg.get(sym, {}).get("enabled", True),
+            "qty":     _cfg.get(sym, {}).get("qty", 1),
+            "params":  strategy.get_params() if hasattr(strategy, "get_params") else {},
+        }
+    return jsonify({
+        "mode":                orchestrator.mode,
+        "active_strategy":     orchestrator.active_strategy_name,
+        "daily_loss_limit":    float(os.environ.get("DAILY_LOSS_LIMIT", 200)),
+        "daily_profit_target": float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+        "instruments":         instruments_cfg,
+        "strategy_timeframes": orchestrator.strategy_timeframes,
+    })
+
+
+@app.route("/api/agent/settings", methods=["POST"])
+def update_agent_settings():
+    data = request.get_json() or {}
+    if "mode" in data and data["mode"] in ("DTR", "CLAUDE+HERMES", "HALT"):
+        orchestrator.set_mode(data["mode"])
+    if "active_strategy" in data:
+        orchestrator.set_active_strategy(data["active_strategy"])
+    return jsonify({"success": True, "message": "Settings updated"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Liquidate all / Lock / Trigger Claude trade
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/liquidate", methods=["POST"])
+def liquidate_all():
+    import asyncio as _asyncio
+
+    symbols = list(orchestrator.open_trades.keys())
+    if not symbols:
+        return jsonify({"success": True, "message": "No open positions"})
+
+    loop = getattr(orchestrator, "_loop", None)
+    if loop is None or not loop.is_running():
+        return jsonify({"success": False, "message": "Orchestrator not ready"}), 503
+
+    errors = []
+    for sym in symbols:
+        trade = orchestrator.open_trades.get(sym)
+        if trade:
+            future = _asyncio.run_coroutine_threadsafe(
+                orchestrator._early_close_trade(sym, trade, "liquidate_all"),
+                loop,
+            )
+            try:
+                future.result(timeout=10)
+            except Exception as exc:
+                errors.append(f"{sym}: {exc}")
+
+    if errors:
+        return jsonify({"success": False, "message": "; ".join(errors)})
+    return jsonify({"success": True, "message": f"Liquidated {len(symbols)} position(s)"})
+
+
+@app.route("/api/agent/lock", methods=["POST"])
+def lock_trading():
+    orchestrator.set_mode("HALT")
+    return jsonify({"success": True, "message": "Trading locked"})
+
+
+@app.route("/api/agent/claude-trade", methods=["POST"])
+def trigger_claude_trade():
+    orchestrator.set_mode("CLAUDE+HERMES")
+    return jsonify({"success": True, "message": "Claude+Hermes autonomous mode activated"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Broker orders (GET /api/agent/orders)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/orders")
+def get_orders():
+    import asyncio as _asyncio
+
+    loop = getattr(orchestrator, "_loop", None)
+    if loop is None or not loop.is_running() or orchestrator.api is None:
+        return jsonify({})
+
+    try:
+        future = _asyncio.run_coroutine_threadsafe(
+            orchestrator.api.get_open_orders(),
+            loop,
+        )
+        orders = future.result(timeout=5) or []
+        by_symbol: dict = {}
+        for o in orders:
+            sym = o.get("symbol", o.get("contractId", "unknown"))
+            by_symbol.setdefault(sym, []).append(o)
+        return jsonify(by_symbol)
+    except Exception as exc:
+        logger.error(f"❌ get_orders error: {exc}")
+        return jsonify({})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Toggle instrument enabled/disabled (POST /api/agent/instruments/<symbol>/toggle)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/agent/instruments/<symbol>/toggle", methods=["POST"])
+def toggle_instrument(symbol: str):
+    from multi_instrument_config import MULTI_INSTRUMENT_CONFIG as _cfg
+
+    if symbol not in _cfg:
+        return jsonify({"success": False, "message": f"Unknown instrument: {symbol}"}), 404
+
+    current = _cfg[symbol].get("enabled", True)
+    _cfg[symbol]["enabled"] = not current
+    return jsonify({
+        "success": True,
+        "symbol":  symbol,
+        "enabled": _cfg[symbol]["enabled"],
+        "message": f"{symbol} {'enabled' if _cfg[symbol]['enabled'] else 'disabled'}",
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Dev server
 # ─────────────────────────────────────────────────────────────────────────────
 
