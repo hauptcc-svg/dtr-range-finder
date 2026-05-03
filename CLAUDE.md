@@ -38,18 +38,21 @@ supabase/migrations/        — SQL migrations (run in order)
 
 ## Environment Variables Required
 ```
-PROJECTX_USERNAME=
-PROJECTX_PASSWORD=
-PROJECTX_BASE_URL=
+PROJECTX_USERNAME=          # TopstepX login email
+PROJECTX_API_KEY=           # TopstepX API key from topstepx.com/settings?tab=api (NOT password)
+PROJECTX_ACCOUNT_ID=        # Numeric account ID from TopstepX
 ANTHROPIC_API_KEY=
 OPENROUTER_API_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
-FRONTEND_URL=https://your-app.vercel.app
+FRONTEND_URL=https://project-wonf5.vercel.app
 PORT=5000
 ```
+
+> **Note:** `PROJECTX_PASSWORD` is NOT used. The auth endpoint is `POST /api/Auth/loginKey`
+> with body `{ userName, apiKey }`. No appId, cid, or deviceId needed.
 
 ## Architecture Decisions
 - **Hermes JSON output** uses snake_case: `win_rate_by_setup`, `best_instruments`, `worst_instruments`, `param_recommendations`, `early_close_analysis`, `news_correlation`, `overall_summary`
@@ -58,6 +61,8 @@ PORT=5000
 - **Build for Vercel**: use `BASE_PATH=/dtr-dashboard` in Vite config for production deploy
 - **Build for local preview**: use `BASE_PATH=/` to avoid blank page
 - **Terminal UI design system**: JetBrains Mono font, `.terminal-card` CSS class (backdrop-blur, rgba dark bg), neon green BOS glow (`bos-active` animation)
+- **ProjectX auth**: endpoint is `POST /api/Auth/loginKey` with `{ userName, apiKey }` — NOT `/api/Auth/signIn` with password+appId fields. Only PROJECTX_USERNAME + PROJECTX_API_KEY + PROJECTX_ACCOUNT_ID needed.
+- **Dashboard mode control**: DTR / XXX / AI MODE / HALT buttons are on the dashboard UI — no manual API calls needed to switch strategy
 
 ## API Endpoints (Flask)
 | Method | Path | Description |

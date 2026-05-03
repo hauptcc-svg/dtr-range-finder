@@ -34,11 +34,20 @@
 [x] Fixed Railway build failure: added custom start command (gunicorn -w 2 -b 0.0.0.0:$PORT flask_autonomous_trading:app)
 [x] Added all env vars to Railway Variables tab (pending FRONTEND_URL)
 
+## 2026-05-03
+
+[x] Fixed ProjectX auth: wrong endpoint (/api/Auth/signIn → /api/Auth/loginKey) + wrong field (password → apiKey)
+[x] Updated PROJECTX_API_KEY in Railway with correct TopstepX API key from topstepx.com/settings?tab=api
+[x] Railway backend fully live: https://dtr-range-finder-production.up.railway.app
+    - Auth ✅ | Supabase ✅ | Claude brain ✅ | Hermes brain ✅ | DTRv3 x4 instruments ✅
+[x] GET /health → {"status":"ok","running":true,"halted":false,"mode":"HALT"}
+[x] Deployed React frontend to Vercel: https://project-wonf5.vercel.app
+    - Root: artifacts/dtr-dashboard | Build: pnpm build | Output: dist/public
+    - VITE_API_URL = https://dtr-range-finder-production.up.railway.app
+
 ## Pending
-[ ] Confirm Railway Flask backend is live (redeploy in progress)
-[ ] Get Railway public URL once deploy succeeds
-[ ] Deploy React frontend to Vercel (root: artifacts/dtr-dashboard)
-[ ] Add VITE_API_URL=<railway-url> to Vercel env vars
-[ ] Add FRONTEND_URL=<vercel-url> back to Railway
-[ ] End-to-end smoke test: GET /health → GET /api/live/dashboard
-[ ] 2-week forward test: net positive P&L
+
+[ ] Add FRONTEND_URL=https://project-wonf5.vercel.app to Railway Variables
+[ ] Smoke test dashboard: open Vercel URL, confirm live data loads
+[ ] Verify Telegram bot sends notifications
+[ ] Activate DTR strategy (POST /api/mode/dtr) and begin 2-week forward test
