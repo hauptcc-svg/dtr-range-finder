@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class ProjectXAPI:
     """ProjectX Gateway API Client"""
-    
+
     def __init__(
         self,
         username: str,
@@ -27,7 +27,11 @@ class ProjectXAPI:
         self.username = username
         self.password = password
         self.account_id = account_id
-        
+        self.app_id = os.environ.get("PROJECTX_APP_ID", "")
+        self.app_version = os.environ.get("PROJECTX_APP_VERSION", "1.0.0")
+        self.cid = int(os.environ.get("PROJECTX_CID", "0"))
+        self.device_id = os.environ.get("PROJECTX_DEVICE_ID", "dtr-trading-agent-v1")
+
         self.base_url = "https://gateway.projectx.com"
         self.session: Optional[aiohttp.ClientSession] = None
         self.access_token = None
@@ -51,7 +55,11 @@ class ProjectXAPI:
             
             auth_data = {
                 "username": self.username,
-                "password": self.password
+                "password": self.password,
+                "appId": self.app_id,
+                "appVersion": self.app_version,
+                "cid": self.cid,
+                "deviceId": self.device_id,
             }
             
             async with self.session.post(
