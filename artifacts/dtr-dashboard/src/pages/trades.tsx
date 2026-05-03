@@ -174,20 +174,20 @@ export function Trades() {
 
       <Card className="bg-card border-border rounded-md shadow-none">
         <CardContent className="p-0">
-          <div className="rounded-md border-0">
+          <div className="rounded-md border-0 overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">TIME</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider hidden sm:table-cell">TIME</TableHead>
                   <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">INSTRUMENT</TableHead>
                   <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">DIR</TableHead>
-                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">QTY</TableHead>
-                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-right">ENTRY</TableHead>
-                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-right">EXIT</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider hidden sm:table-cell">QTY</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-right hidden md:table-cell">ENTRY</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-right hidden md:table-cell">EXIT</TableHead>
                   <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-right">PNL</TableHead>
-                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">SESSION</TableHead>
-                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider">STATUS</TableHead>
-                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-center">JOURNAL</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider hidden lg:table-cell">SESSION</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider hidden sm:table-cell">STATUS</TableHead>
+                  <TableHead className="font-mono text-xs text-muted-foreground font-bold tracking-wider text-center">NOTE</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -207,7 +207,7 @@ export function Trades() {
                   data?.trades.map((trade) => (
                     <React.Fragment key={trade.id}>
                       <TableRow className="border-border hover:bg-muted/50 transition-colors">
-                        <TableCell className="font-mono text-xs whitespace-nowrap text-muted-foreground">
+                        <TableCell className="font-mono text-xs whitespace-nowrap text-muted-foreground hidden sm:table-cell">
                           {formatDate(trade.entryTime)}
                         </TableCell>
                         <TableCell className="font-mono font-medium">{trade.instrument}</TableCell>
@@ -217,9 +217,9 @@ export function Trades() {
                         )}>
                           {trade.direction.toUpperCase()}
                         </TableCell>
-                        <TableCell className="font-mono text-xs">{trade.qty}</TableCell>
-                        <TableCell className="font-mono text-xs text-right">{formatPrice(trade.entryPrice)}</TableCell>
-                        <TableCell className="font-mono text-xs text-right text-muted-foreground">{formatPrice(trade.exitPrice)}</TableCell>
+                        <TableCell className="font-mono text-xs hidden sm:table-cell">{trade.qty}</TableCell>
+                        <TableCell className="font-mono text-xs text-right hidden md:table-cell">{formatPrice(trade.entryPrice)}</TableCell>
+                        <TableCell className="font-mono text-xs text-right text-muted-foreground hidden md:table-cell">{formatPrice(trade.exitPrice)}</TableCell>
                         <TableCell className={cn(
                           "font-mono text-xs font-bold text-right",
                           (trade.pnl || 0) > 0 ? "text-success" :
@@ -227,8 +227,8 @@ export function Trades() {
                         )}>
                           {formatCurrency(trade.pnl)}
                         </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{formatSessionPhase(trade.session)}</TableCell>
-                        <TableCell className="font-mono text-xs">
+                        <TableCell className="font-mono text-xs text-muted-foreground hidden lg:table-cell">{formatSessionPhase(trade.session)}</TableCell>
+                        <TableCell className="font-mono text-xs hidden sm:table-cell">
                           <span className={cn(
                             "px-2 py-0.5 rounded text-[10px] uppercase font-bold",
                             trade.status === "open" ? "bg-primary/20 text-primary" :

@@ -203,16 +203,16 @@ function OpenTradesInline({ isAuthenticated }: { isAuthenticated: boolean }) {
           {closeMessage.symbol}: {closeMessage.text}
         </div>
       )}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto -mx-1">
         <table className="w-full text-[11px] font-mono">
           <thead>
             <tr className="text-muted-foreground border-b border-border/50">
               <th className="text-left pb-1.5 pr-3 font-bold tracking-wider">INSTRUMENT</th>
               <th className="text-left pb-1.5 pr-2 font-bold tracking-wider">DIR</th>
-              <th className="text-left pb-1.5 pr-2 font-bold tracking-wider">SIZE</th>
-              <th className="text-right pb-1.5 pr-2 font-bold tracking-wider">ENTRY</th>
-              <th className="text-right pb-1.5 pr-2 font-bold tracking-wider">CURRENT</th>
-              <th className="text-right pb-1.5 pr-2 font-bold tracking-wider">UNREAL PNL</th>
+              <th className="hidden sm:table-cell text-left pb-1.5 pr-2 font-bold tracking-wider">SIZE</th>
+              <th className="hidden sm:table-cell text-right pb-1.5 pr-2 font-bold tracking-wider">ENTRY</th>
+              <th className="hidden md:table-cell text-right pb-1.5 pr-2 font-bold tracking-wider">CURRENT</th>
+              <th className="text-right pb-1.5 pr-2 font-bold tracking-wider">P&L</th>
               <th className="text-center pb-1.5 font-bold tracking-wider">CLOSE</th>
             </tr>
           </thead>
@@ -223,9 +223,9 @@ function OpenTradesInline({ isAuthenticated }: { isAuthenticated: boolean }) {
                 <td className={cn("py-2 pr-2 font-bold", position.direction === "long" ? "text-success" : "text-destructive")}>
                   {position.direction.toUpperCase()}
                 </td>
-                <td className="py-2 pr-2 text-muted-foreground">{position.size}</td>
-                <td className="py-2 pr-2 text-right text-muted-foreground">{formatPrice(position.entryPrice)}</td>
-                <td className="py-2 pr-2 text-right font-medium">{formatPrice(position.currentPrice)}</td>
+                <td className="hidden sm:table-cell py-2 pr-2 text-muted-foreground">{position.size}</td>
+                <td className="hidden sm:table-cell py-2 pr-2 text-right text-muted-foreground">{formatPrice(position.entryPrice)}</td>
+                <td className="hidden md:table-cell py-2 pr-2 text-right font-medium">{formatPrice(position.currentPrice)}</td>
                 <td className={cn("py-2 pr-2 text-right font-bold",
                   position.unrealizedPnl > 0 ? "text-success" : position.unrealizedPnl < 0 ? "text-destructive" : "text-muted-foreground"
                 )}>

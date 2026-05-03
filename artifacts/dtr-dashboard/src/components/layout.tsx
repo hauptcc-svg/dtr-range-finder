@@ -69,8 +69,8 @@ export function Layout({ children }: LayoutProps) {
           </span>
         </header>
 
-        <div className="flex-1 overflow-auto p-5">
-          <div className="max-w-6xl mx-auto">
+        <div className="flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5">
+          <div className="max-w-6xl mx-auto min-w-0">
             {children}
           </div>
         </div>
