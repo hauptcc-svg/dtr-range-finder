@@ -30,10 +30,12 @@ Deploy: gunicorn -w 2 -b 0.0.0.0:$PORT "dtr-complete-final.flask_autonomous_trad
 """
 
 import asyncio
+import json
 import logging
 import os
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -53,6 +55,35 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Persisted risk settings (survive process restarts)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RISK_FILE = Path(__file__).parent / "risk_settings.json"
+
+def _load_risk_settings() -> dict:
+    """Load persisted risk settings, falling back to env var defaults."""
+    defaults = {
+        "daily_loss_limit":    float(os.environ.get("DAILY_LOSS_LIMIT", 200)),
+        "daily_profit_target": float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+    }
+    try:
+        if _RISK_FILE.exists():
+            saved = json.loads(_RISK_FILE.read_text())
+            defaults.update({k: v for k, v in saved.items() if k in defaults})
+            logger.info("Loaded persisted risk settings: %s", defaults)
+    except Exception as exc:
+        logger.warning("Could not load risk_settings.json: %s", exc)
+    return defaults
+
+def _save_risk_settings() -> None:
+    try:
+        _RISK_FILE.write_text(json.dumps(_risk_settings, indent=2))
+    except Exception as exc:
+        logger.warning("Could not save risk_settings.json: %s", exc)
+
+_risk_settings: dict = _load_risk_settings()
+
 CORS(app, origins=[
     os.environ.get("FRONTEND_URL", "http://localhost:5173"),
     "https://*.vercel.app",
@@ -60,8 +91,8 @@ CORS(app, origins=[
 ])
 
 drawdown_monitor = DrawdownMonitor(
-    loss_limit=float(os.environ.get("DAILY_LOSS_LIMIT",   200)),
-    profit_target=float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+    loss_limit=_risk_settings["daily_loss_limit"],
+    profit_target=_risk_settings["daily_profit_target"],
 )
 
 # Wire drawdown monitor → orchestrator (injected after both are created)
@@ -764,11 +795,13 @@ def agent_status():
 
     return jsonify({
         "running":                   orchestrator.running,
+        "mode":                      orchestrator.mode,
+        "activeStrategy":            orchestrator.active_strategy_name,
         "sessionPhase":              phase,
         "dailyPnl":                  state.get("daily_pnl", 0),
         "unrealizedPnl":             round(unrealized, 2),
-        "dailyLossLimit":            float(os.environ.get("DAILY_LOSS_LIMIT", 200)),
-        "dailyProfitTarget":         float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+        "dailyLossLimit":            _risk_settings["daily_loss_limit"],
+        "dailyProfitTarget":         _risk_settings["daily_profit_target"],
         "tradeCount":                state.get("trade_count", 0),
         "lastUpdated":               state.get("timestamp", datetime.now(timezone.utc).isoformat()),
         "authenticatedWithProjectX": (orchestrator.api is not None and not orchestrator.halted),
@@ -1047,8 +1080,8 @@ def get_agent_settings():
     return jsonify({
         "mode":                orchestrator.mode,
         "active_strategy":     orchestrator.active_strategy_name,
-        "daily_loss_limit":    float(os.environ.get("DAILY_LOSS_LIMIT", 200)),
-        "daily_profit_target": float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+        "daily_loss_limit":    _risk_settings["daily_loss_limit"],
+        "daily_profit_target": _risk_settings["daily_profit_target"],
         "instruments":         instruments_cfg,
         "strategy_timeframes": orchestrator.strategy_timeframes,
     })
@@ -1057,6 +1090,7 @@ def get_agent_settings():
 @app.route("/api/agent/settings", methods=["POST"])
 def update_agent_settings():
     data = request.get_json() or {}
+    changed = False
     if "mode" in data and data["mode"] in ("DTR", "CLAUDE+HERMES", "HALT"):
         orchestrator.set_mode(data["mode"])
     if "active_strategy" in data:
@@ -1066,6 +1100,20 @@ def update_agent_settings():
         for sym, qty in data["instrument_qty"].items():
             if sym in _cfg and isinstance(qty, int) and 1 <= qty <= 50:
                 _cfg[sym]["qty"] = qty
+    if "daily_loss_limit" in data:
+        val = float(data["daily_loss_limit"])
+        if val > 0:
+            _risk_settings["daily_loss_limit"] = val
+            drawdown_monitor.loss_limit = val
+            changed = True
+    if "daily_profit_target" in data:
+        val = float(data["daily_profit_target"])
+        if val > 0:
+            _risk_settings["daily_profit_target"] = val
+            drawdown_monitor.profit_target = val
+            changed = True
+    if changed:
+        _save_risk_settings()
     return jsonify({"success": True, "message": "Settings updated"})
 
 

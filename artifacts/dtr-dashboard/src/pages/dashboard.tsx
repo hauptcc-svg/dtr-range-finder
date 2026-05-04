@@ -591,7 +591,7 @@ export function Dashboard() {
 
   const ext = agentStatus as (typeof agentStatus & AgentStatusExtended);
   const activeStrategy = ext?.activeStrategy ?? "";
-  const activeMode = (agentStatus as unknown as Record<string, unknown>)?.mode as string ?? (agentStatus.claudeAutonomousMode ? "CLAUDE+HERMES" : "DTR");
+  const activeMode = (agentStatus as unknown as Record<string, unknown>)?.mode as string ?? (agentStatus.claudeAutonomousMode ? "CLAUDE+HERMES" : "");
   const sessionLabel = activeStrategy === "XXX" ? "London+NY (01:00–17:00)" : "2AM + 9AM (NY)";
   const hasOpenTrades = ((agentStatus as unknown as Record<string, unknown>)?.open_trades as number ?? 0) > 0;
 
@@ -656,10 +656,10 @@ export function Dashboard() {
                 <p className="text-[10px] font-mono uppercase text-muted-foreground tracking-widest">Trading Mode</p>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { label: "DTR", icon: <BarChart2 className="w-3 h-3" />, endpoint: "/api/mode/dtr", active: activeStrategy === "DTR" && activeMode === "DTR" },
-                    { label: "XXX", icon: null, endpoint: "/api/mode/xxx", active: activeStrategy === "XXX" },
-                    { label: "AI MODE", icon: null, endpoint: "/api/mode/claude", active: activeMode === "CLAUDE+HERMES" },
-                    { label: "HALT", icon: null, endpoint: "/api/mode/halt", active: activeMode === "HALT" },
+                    { label: "DTR",     icon: <BarChart2 className="w-3 h-3" />, endpoint: "/api/mode/dtr",    active: activeMode === "DTR"          && activeStrategy !== "XXX" },
+                    { label: "XXX",     icon: null,                               endpoint: "/api/mode/xxx",    active: activeMode === "DTR"          && activeStrategy === "XXX" },
+                    { label: "AI MODE", icon: null,                               endpoint: "/api/mode/claude", active: activeMode === "CLAUDE+HERMES" },
+                    { label: "HALT",    icon: null,                               endpoint: "/api/mode/halt",   active: activeMode === "HALT" },
                   ].map(({ label, icon, endpoint, active }) => (
                     <button key={label}
                       disabled={!isAuthenticated}
@@ -667,11 +667,12 @@ export function Dashboard() {
                       className={cn(
                         "h-[52px] font-mono font-bold text-sm rounded transition-all duration-150",
                         active
-                          ? label === "HALT" ? "bg-destructive text-white shadow-[0_0_8px_rgba(239,68,68,0.3)]"
+                          ? label === "HALT"    ? "bg-destructive text-white shadow-[0_0_8px_rgba(239,68,68,0.3)]"
                             : label === "AI MODE" ? "bg-primary text-primary-foreground shadow-[0_0_8px_rgba(99,102,241,0.3)] animate-pulse"
                             : "bg-indigo-600 text-white shadow-[0_0_8px_rgba(99,102,241,0.25)]"
-                          : "bg-card border border-border text-muted-foreground hover:border-foreground/30",
-                        !isAuthenticated && "opacity-50 cursor-not-allowed"
+                          : isAuthenticated
+                            ? "bg-card border border-border text-muted-foreground hover:border-foreground/60 hover:text-foreground hover:bg-muted cursor-pointer"
+                            : "bg-card border border-border text-muted-foreground opacity-50 cursor-not-allowed"
                       )}>
                       <div className="flex items-center justify-center gap-1">
                         {icon}{label}
@@ -679,6 +680,11 @@ export function Dashboard() {
                     </button>
                   ))}
                 </div>
+                {isAuthenticated && !activeMode && (
+                  <p className="text-[10px] font-mono text-amber-400/80 text-center">
+                    ← Select a mode, then click START
+                  </p>
+                )}
                 <p className="text-[10px] font-mono text-muted-foreground">
                   Active: <span className="text-foreground">{activeStrategy || "—"}</span>
                   {" — "}<span className="text-foreground">{sessionLabel}</span>
