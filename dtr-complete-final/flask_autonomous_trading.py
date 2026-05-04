@@ -653,17 +653,29 @@ def debug_contracts():
                 }
             except Exception as exc:
                 results[symbol] = {"contract_id": cid, "error": str(exc)}
-        return results
+        # Also re-search contracts with live=True to show what IDs are available
+        search_results = {}
+        for symbol in list(orchestrator.contract_ids.keys()):
+            try:
+                contracts = await orchestrator.api.search_contracts(symbol)
+                search_results[symbol] = [
+                    {"id": c.get("id"), "name": c.get("name"), "contractId": c.get("contractId")}
+                    for c in (contracts or [])[:3]
+                ]
+            except Exception as exc:
+                search_results[symbol] = {"error": str(exc)}
+        return results, search_results
 
     future = _asyncio.run_coroutine_threadsafe(_test_bars(), loop)
     try:
-        results = future.result(timeout=20)
+        results, search_results = future.result(timeout=30)
     except Exception as exc:
         return jsonify({"error": str(exc), "contract_ids": orchestrator.contract_ids}), 500
 
     return jsonify({
         "contract_ids": orchestrator.contract_ids,
         "bar_test": results,
+        "search_live": search_results,
     })
 
 

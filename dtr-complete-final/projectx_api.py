@@ -213,9 +213,10 @@ class ProjectXAPI:
     ) -> Optional[List[Dict[str, Any]]]:
         try:
             await self.refresh_token_if_needed()
+            # TopstepX Combine accounts require live=True to get real market data
             body = {
-                "contractId": int(contract_id) if contract_id.isdigit() else contract_id,
-                "live": False,
+                "contractId": int(contract_id) if str(contract_id).isdigit() else contract_id,
+                "live": True,
                 "limit": limit,
                 "unit": 1,
                 "unitNumber": 1,
@@ -234,25 +235,43 @@ class ProjectXAPI:
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("bars", [])
-                return None
+                    bars = data.get("bars", [])
+                    if not bars:
+                        self.logger.warning(
+                            f"⚠️  get_bars({contract_id}): 0 bars returned. "
+                            f"Response keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}"
+                        )
+                    return bars
+                else:
+                    raw = await resp.text()
+                    self.logger.error(f"❌ get_bars HTTP {resp.status} for {contract_id}: {raw[:300]}")
+                    return None
         except Exception as e:
-            self.logger.error(f"❌ Error getting bars: {e}")
+            self.logger.error(f"❌ Error getting bars for {contract_id}: {e}")
             return None
 
     async def search_contracts(self, symbol: str) -> Optional[List[Dict[str, Any]]]:
+        """Search for contracts. Uses live=True to find real market data contracts."""
         try:
             await self.refresh_token_if_needed()
             async with self.session.post(
                 f"{self.base_url}/api/Contract/search",
-                json={"searchText": symbol, "live": False},
+                json={"searchText": symbol, "live": True},
                 headers=self._get_headers(),
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("contracts", [])
-                return None
+                    contracts = data.get("contracts", [])
+                    self.logger.info(
+                        f"🔍 search_contracts('{symbol}'): found {len(contracts)} contract(s)"
+                        + (f" — first id={contracts[0].get('id')} name={contracts[0].get('name')}" if contracts else "")
+                    )
+                    return contracts
+                else:
+                    raw = await resp.text()
+                    self.logger.error(f"❌ search_contracts HTTP {resp.status}: {raw[:200]}")
+                    return None
         except Exception as e:
             self.logger.error(f"❌ Error searching contracts: {e}")
             return None
