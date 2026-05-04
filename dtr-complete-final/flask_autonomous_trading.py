@@ -1547,6 +1547,168 @@ def toggle_instrument(symbol: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TradingView Webhook  (POST /api/webhook/tradingview)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Set WEBHOOK_SECRET in Railway env vars.  Use the same value in the TradingView
+# alert message body (JSON).
+#
+# TradingView alert message format (JSON body):
+#   {
+#     "secret":   "{{your_secret}}",
+#     "symbol":   "MNQM26",          ← or TV alias: MNQ1!, MYM1!, MGC1!, MCL1!
+#     "side":     "BUY",             ← BUY or SELL
+#     "quantity": 1,                 ← optional, defaults to instrument qty
+#     "comment":  "{{strategy.order.comment}}"  ← optional
+#   }
+#
+# Webhook URL to paste in TradingView:
+#   https://dtr-range-finder-production.up.railway.app/api/webhook/tradingview
+# ─────────────────────────────────────────────────────────────────────────────
+
+# TradingView ticker → TopstepX contract symbol
+# Covers: futures codes, CFD names (Pepperstone/OANDA/etc), TV continuous contracts
+_TV_SYMBOL_MAP = {
+    # ── Micro NQ / NAS100 ──────────────────────────────────────────────────
+    "MNQM26":   "MNQM26",
+    "MNQ1!":    "MNQM26",
+    "NAS100":   "MNQM26",
+    "NAS100USD":"MNQM26",
+    "USTEC":    "MNQM26",
+    "NDX":      "MNQM26",
+    "US100":    "MNQM26",
+
+    # ── Micro YM / US30 / Dow ──────────────────────────────────────────────
+    "MYMM26":   "MYMM26",
+    "MYM1!":    "MYMM26",
+    "US30":     "MYMM26",
+    "US30USD":  "MYMM26",
+    "WS30":     "MYMM26",
+    "DJI":      "MYMM26",
+    "DJ30":     "MYMM26",
+
+    # ── Micro Gold / XAUUSD ────────────────────────────────────────────────
+    "MGCM26":   "MGCM26",
+    "MGC1!":    "MGCM26",
+    "XAUUSD":   "MGCM26",
+    "GOLD":     "MGCM26",
+    "GC1!":     "MGCM26",
+    "XAUUSDT":  "MGCM26",
+
+    # ── Micro Crude Oil / WTI ──────────────────────────────────────────────
+    "MCLN26":   "MCLN26",
+    "MCLK26":   "MCLN26",
+    "MCL1!":    "MCLN26",
+    "WTI":      "MCLN26",
+    "USOIL":    "MCLN26",
+    "CL1!":     "MCLN26",
+    "WTICOUSD": "MCLN26",
+    "OIL":      "MCLN26",
+
+    # ── Micro S&P 500 / US500 ─────────────────────────────────────────────
+    # Add MESM26 to Railway INSTRUMENTS dict if you want to trade this
+    "MESM26":   "MESM26",
+    "MES1!":    "MESM26",
+    "US500":    "MESM26",
+    "SPX500":   "MESM26",
+    "SP500":    "MESM26",
+    "SPX":      "MESM26",
+    "ES1!":     "MESM26",
+}
+
+
+@app.route("/api/webhook/tradingview", methods=["POST"])
+def tradingview_webhook():
+    import asyncio as _asyncio
+
+    # ── Parse body ────────────────────────────────────────────────────────────
+    data = request.get_json(silent=True) or {}
+    if not data:
+        # TradingView sometimes sends plain text — try to parse it
+        try:
+            import json as _json
+            data = _json.loads(request.data.decode())
+        except Exception:
+            return jsonify({"success": False, "error": "Invalid JSON body"}), 400
+
+    # ── Secret check ──────────────────────────────────────────────────────────
+    expected_secret = os.environ.get("WEBHOOK_SECRET", "")
+    if expected_secret:
+        provided = data.get("secret") or request.headers.get("X-Webhook-Secret", "")
+        if provided != expected_secret:
+            logger.warning("⚠️  TradingView webhook: bad secret from %s", request.remote_addr)
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    # ── Field extraction ──────────────────────────────────────────────────────
+    tv_symbol = str(data.get("symbol", "")).upper().strip()
+    side      = str(data.get("side", "")).upper().strip()
+    comment   = str(data.get("comment", "tv-alert"))
+
+    symbol = _TV_SYMBOL_MAP.get(tv_symbol)
+    if not symbol:
+        return jsonify({"success": False, "error": f"Unknown symbol: {tv_symbol}. "
+                        f"Use one of: {list(_TV_SYMBOL_MAP.keys())}"}), 400
+
+    if side not in ("BUY", "SELL"):
+        return jsonify({"success": False, "error": "side must be BUY or SELL"}), 400
+
+    # Quantity: use payload value, else fall back to per-instrument config
+    from multi_instrument_config import MULTI_INSTRUMENT_CONFIG as _cfg
+    default_qty = _cfg.get(symbol, {}).get("qty", 1)
+    try:
+        quantity = int(data.get("quantity", default_qty))
+    except (ValueError, TypeError):
+        quantity = default_qty
+    quantity = max(1, min(quantity, 50))
+
+    # ── Broker connection check ───────────────────────────────────────────────
+    if orchestrator.api is None:
+        logger.error("❌ TradingView webhook: broker not connected")
+        return jsonify({"success": False, "error": "Not connected to broker"}), 503
+
+    contract_id = orchestrator.contract_ids.get(symbol)
+    if not contract_id:
+        logger.error("❌ TradingView webhook: contract ID not resolved for %s", symbol)
+        return jsonify({
+            "success": False,
+            "error": f"Contract ID for {symbol} not yet resolved — wait 60s after boot",
+        }), 503
+
+    # ── Place order (same thread-safe pattern as manual_order) ────────────────
+    logger.info("📡 TradingView webhook: %s %s × %d", side, symbol, quantity)
+    loop = getattr(orchestrator, "_loop", None)
+    try:
+        if loop and loop.is_running():
+            future = _asyncio.run_coroutine_threadsafe(
+                orchestrator.api.place_order(contract_id, side, quantity, "MARKET", comment=comment),
+                loop,
+            )
+            result = future.result(timeout=10)
+        else:
+            new_loop = _asyncio.new_event_loop()
+            result = new_loop.run_until_complete(
+                orchestrator.api.place_order(contract_id, side, quantity, "MARKET", comment=comment)
+            )
+            new_loop.close()
+    except Exception as exc:
+        logger.error("❌ TradingView webhook order error: %s", exc)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    if result and result.get("success", True):
+        logger.info("✅ TradingView webhook: %s %s × %d → orderId=%s",
+                    side, symbol, quantity, result.get("orderId"))
+        return jsonify({
+            "success": True,
+            "message": f"{side} {quantity} {symbol} placed",
+            "orderId": result.get("orderId"),
+        })
+
+    broker_error = (result or {}).get("errorMessage") or (result or {}).get("message") or "Order rejected"
+    logger.error("❌ TradingView webhook: broker rejected %s %s: %s", side, symbol, broker_error)
+    return jsonify({"success": False, "error": broker_error}), 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Dev server
 # ─────────────────────────────────────────────────────────────────────────────
 

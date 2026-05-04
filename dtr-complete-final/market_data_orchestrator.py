@@ -44,10 +44,11 @@ NY_TZ = ZoneInfo("America/New_York")
 # ─────────────────────────────────────────────────────────────────────────────
 
 INSTRUMENTS = {
-    "MYMM26": {"name": "Mini YM",        "point_value": 12.50},
+    "MYMM26": {"name": "Micro YM (Dow)",  "point_value": 0.50},
     "MCLN26": {"name": "Micro Crude Oil", "point_value": 10.00},
     "MGCM26": {"name": "Micro Gold",      "point_value": 10.00},
     "MNQM26": {"name": "Micro NQ",        "point_value": 20.00},
+    "MESM26": {"name": "Micro S&P 500",   "point_value": 5.00},
 }
 
 TICK_INTERVAL = 60   # seconds between data fetches
