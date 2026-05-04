@@ -251,12 +251,17 @@ class ProjectXAPI:
             return None
 
     async def search_contracts(self, symbol: str) -> Optional[List[Dict[str, Any]]]:
-        """Search for contracts. Uses live=True to find real market data contracts."""
+        """Search for contracts.
+
+        NOTE: live=False is required for contract SEARCH on TopstepX — the search endpoint
+        only returns results when live=False. live=True is used only for get_bars() to fetch
+        real market data once the contract ID is known.
+        """
         try:
             await self.refresh_token_if_needed()
             async with self.session.post(
                 f"{self.base_url}/api/Contract/search",
-                json={"searchText": symbol, "live": True},
+                json={"searchText": symbol, "live": False},
                 headers=self._get_headers(),
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:

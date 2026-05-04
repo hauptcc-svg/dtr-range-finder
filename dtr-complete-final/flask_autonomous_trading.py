@@ -653,7 +653,7 @@ def debug_contracts():
                 }
             except Exception as exc:
                 results[symbol] = {"contract_id": cid, "error": str(exc)}
-        # Also re-search contracts with live=True to show what IDs are available
+        # Re-search contracts with live=False (required to find contract IDs on TopstepX)
         search_results = {}
         for symbol in list(orchestrator.contract_ids.keys()):
             try:
