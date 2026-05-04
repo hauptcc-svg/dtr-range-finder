@@ -1556,11 +1556,22 @@ def toggle_instrument(symbol: str):
 # TradingView alert message format (JSON body):
 #   {
 #     "secret":   "{{your_secret}}",
-#     "symbol":   "MNQM26",          ← or TV alias: MNQ1!, MYM1!, MGC1!, MCL1!
-#     "side":     "BUY",             ← BUY or SELL
+#     "symbol":   "NAS100",          ← or TV alias: MNQ1!, US30, XAUUSD, etc.
+#     "side":     "BUY",             ← BUY or SELL  (hardcode — don't use {{strategy.order.action}})
 #     "quantity": 1,                 ← optional, defaults to instrument qty
-#     "comment":  "{{strategy.order.comment}}"  ← optional
+#     "sl":       19200.0,           ← optional stop-loss price
+#     "tp1":      19350.0,           ← optional take-profit 1 price
+#     "tp2":      19500.0,           ← optional take-profit 2 price (splits qty evenly with tp1)
+#     "comment":  "Long NAS100"      ← optional label
 #   }
+#
+# Bracket order behaviour:
+#   • Entry always fires as MARKET.
+#   • If "sl" is set → STOP order placed on opposite side at that price.
+#   • If "tp1" is set (no tp2) → one LIMIT order for full quantity.
+#   • If both "tp1" and "tp2" set → two LIMIT orders, quantity split in half.
+#   • SL/TP orders are placed after a successful entry (orderId returned).
+#   • If a bracket order fails the entry is NOT reversed — check logs.
 #
 # Webhook URL to paste in TradingView:
 #   https://dtr-range-finder-production.up.railway.app/api/webhook/tradingview
@@ -1644,6 +1655,17 @@ def tradingview_webhook():
     side      = str(data.get("side", "")).upper().strip()
     comment   = str(data.get("comment", "tv-alert"))
 
+    # Optional SL / TP prices (None = not set)
+    def _float_or_none(v):
+        try:
+            return float(v) if v not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            return None
+
+    sl_price  = _float_or_none(data.get("sl"))
+    tp1_price = _float_or_none(data.get("tp1"))
+    tp2_price = _float_or_none(data.get("tp2"))
+
     symbol = _TV_SYMBOL_MAP.get(tv_symbol)
     if not symbol:
         return jsonify({"success": False, "error": f"Unknown symbol: {tv_symbol}. "
@@ -1674,38 +1696,113 @@ def tradingview_webhook():
             "error": f"Contract ID for {symbol} not yet resolved — wait 60s after boot",
         }), 503
 
-    # ── Place order (same thread-safe pattern as manual_order) ────────────────
-    logger.info("📡 TradingView webhook: %s %s × %d", side, symbol, quantity)
-    loop = getattr(orchestrator, "_loop", None)
-    try:
+    # ── Helper: run coroutine thread-safely ───────────────────────────────────
+    def _run(coro):
+        loop = getattr(orchestrator, "_loop", None)
         if loop and loop.is_running():
-            future = _asyncio.run_coroutine_threadsafe(
-                orchestrator.api.place_order(contract_id, side, quantity, "MARKET", comment=comment),
-                loop,
-            )
-            result = future.result(timeout=10)
-        else:
-            new_loop = _asyncio.new_event_loop()
-            result = new_loop.run_until_complete(
-                orchestrator.api.place_order(contract_id, side, quantity, "MARKET", comment=comment)
-            )
+            return _asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=10)
+        new_loop = _asyncio.new_event_loop()
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
             new_loop.close()
+
+    # ── Place MARKET entry order ───────────────────────────────────────────────
+    logger.info("📡 TradingView webhook: %s %s × %d", side, symbol, quantity)
+    try:
+        result = _run(
+            orchestrator.api.place_order(contract_id, side, quantity, "MARKET", comment=comment)
+        )
     except Exception as exc:
         logger.error("❌ TradingView webhook order error: %s", exc)
         return jsonify({"success": False, "error": str(exc)}), 500
 
-    if result and result.get("success", True):
-        logger.info("✅ TradingView webhook: %s %s × %d → orderId=%s",
-                    side, symbol, quantity, result.get("orderId"))
-        return jsonify({
-            "success": True,
-            "message": f"{side} {quantity} {symbol} placed",
-            "orderId": result.get("orderId"),
-        })
+    if not result or not result.get("success", True):
+        broker_error = (result or {}).get("errorMessage") or (result or {}).get("message") or "Order rejected"
+        logger.error("❌ TradingView webhook: broker rejected %s %s: %s", side, symbol, broker_error)
+        return jsonify({"success": False, "error": broker_error}), 400
 
-    broker_error = (result or {}).get("errorMessage") or (result or {}).get("message") or "Order rejected"
-    logger.error("❌ TradingView webhook: broker rejected %s %s: %s", side, symbol, broker_error)
-    return jsonify({"success": False, "error": broker_error}), 400
+    entry_order_id = result.get("orderId")
+    logger.info("✅ TradingView webhook: %s %s × %d → orderId=%s", side, symbol, quantity, entry_order_id)
+
+    # ── Bracket orders (SL / TP) ──────────────────────────────────────────────
+    bracket_side = "SELL" if side == "BUY" else "BUY"
+    bracket_results = []
+
+    if sl_price is not None:
+        try:
+            sl_result = _run(
+                orchestrator.api.place_order(
+                    contract_id, bracket_side, quantity, "STOP",
+                    stop_price=sl_price, comment=f"SL-{comment}"
+                )
+            )
+            if sl_result and sl_result.get("success", True):
+                logger.info("✅ SL order placed @ %s → orderId=%s", sl_price, sl_result.get("orderId"))
+                bracket_results.append({"type": "sl", "price": sl_price, "orderId": sl_result.get("orderId")})
+            else:
+                err = (sl_result or {}).get("errorMessage", "unknown")
+                logger.error("❌ SL order failed: %s", err)
+                bracket_results.append({"type": "sl", "price": sl_price, "error": err})
+        except Exception as exc:
+            logger.error("❌ SL order exception: %s", exc)
+            bracket_results.append({"type": "sl", "price": sl_price, "error": str(exc)})
+
+    if tp1_price is not None:
+        # If both tp1 and tp2, split quantity in half (each gets floor(qty/2), tp1 gets remainder)
+        if tp2_price is not None:
+            tp1_qty = (quantity + 1) // 2  # ceiling half
+            tp2_qty = quantity // 2        # floor half
+        else:
+            tp1_qty = quantity
+            tp2_qty = 0
+
+        try:
+            tp1_result = _run(
+                orchestrator.api.place_order(
+                    contract_id, bracket_side, tp1_qty, "LIMIT",
+                    limit_price=tp1_price, comment=f"TP1-{comment}"
+                )
+            )
+            if tp1_result and tp1_result.get("success", True):
+                logger.info("✅ TP1 order placed @ %s → orderId=%s", tp1_price, tp1_result.get("orderId"))
+                bracket_results.append({"type": "tp1", "price": tp1_price, "orderId": tp1_result.get("orderId")})
+            else:
+                err = (tp1_result or {}).get("errorMessage", "unknown")
+                logger.error("❌ TP1 order failed: %s", err)
+                bracket_results.append({"type": "tp1", "price": tp1_price, "error": err})
+        except Exception as exc:
+            logger.error("❌ TP1 order exception: %s", exc)
+            bracket_results.append({"type": "tp1", "price": tp1_price, "error": str(exc)})
+
+        if tp2_price is not None and tp2_qty > 0:
+            try:
+                tp2_result = _run(
+                    orchestrator.api.place_order(
+                        contract_id, bracket_side, tp2_qty, "LIMIT",
+                        limit_price=tp2_price, comment=f"TP2-{comment}"
+                    )
+                )
+                if tp2_result and tp2_result.get("success", True):
+                    logger.info("✅ TP2 order placed @ %s → orderId=%s", tp2_price, tp2_result.get("orderId"))
+                    bracket_results.append({"type": "tp2", "price": tp2_price, "orderId": tp2_result.get("orderId")})
+                else:
+                    err = (tp2_result or {}).get("errorMessage", "unknown")
+                    logger.error("❌ TP2 order failed: %s", err)
+                    bracket_results.append({"type": "tp2", "price": tp2_price, "error": err})
+            except Exception as exc:
+                logger.error("❌ TP2 order exception: %s", exc)
+                bracket_results.append({"type": "tp2", "price": tp2_price, "error": str(exc)})
+
+    response = {
+        "success": True,
+        "message": f"{side} {quantity} {symbol} placed",
+        "orderId": entry_order_id,
+    }
+    if bracket_results:
+        response["bracket"] = bracket_results
+
+    return jsonify(response)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
