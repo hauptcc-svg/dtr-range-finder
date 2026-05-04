@@ -248,7 +248,7 @@ class ProjectXAPI:
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    bars = data.get("bars", [])
+                    bars = data.get("bars") or []
                     if not bars:
                         self.logger.warning(
                             f"⚠️  get_bars({contract_id}): 0 bars. "

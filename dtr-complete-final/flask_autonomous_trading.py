@@ -689,7 +689,7 @@ def debug_contracts():
                         timeout=_aiohttp.ClientTimeout(total=15)
                     ) as resp:
                         raw = await resp.json()
-                        bars = raw.get("bars", [])
+                        bars = raw.get("bars") or []
                         bar_probe[f"unit_{unit_val}"] = {
                             "contract": cid,
                             "http_status": resp.status,
