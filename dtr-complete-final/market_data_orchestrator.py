@@ -140,6 +140,10 @@ class MarketDataOrchestrator:
         self.halted:  bool = False   # drawdown auto-pause
         self.halt_reason: str = ""
 
+        # ── Contract ID mapping (symbol → numeric ID from ProjectX) ──────────
+        # Populated in start() via search_contracts(). All API calls use these.
+        self.contract_ids: Dict[str, str] = {}
+
         # ── Injected by Flask after construction ──────────────────────────
         self._drawdown_monitor: DrawdownMonitor = None
 
@@ -213,6 +217,10 @@ class MarketDataOrchestrator:
     def get_strategy_state(self, symbol: str) -> Optional[StrategyState]:
         return self.states.get(symbol)
 
+    def _cid(self, symbol: str) -> str:
+        """Return the numeric contract ID for a symbol (resolved on boot)."""
+        return self.contract_ids.get(symbol, symbol)
+
     async def set_active_account(self, account_id: str) -> bool:
         """Switch the active account on ProjectX and locally."""
         result = await self.api.set_active_account(account_id)
@@ -254,6 +262,23 @@ class MarketDataOrchestrator:
                 logger.info(f"🏦 Using account: {self.active_account_id}")
         except Exception as exc:
             logger.warning(f"⚠️  Could not fetch accounts: {exc}")
+
+        # ── Resolve symbol → contract ID ───────────────────────────────────
+        # TopstepX API requires numeric contract IDs, not ticker symbols.
+        for symbol in INSTRUMENTS:
+            try:
+                contracts = await self.api.search_contracts(symbol)
+                if contracts:
+                    # Pick first exact or closest match
+                    cid = str(contracts[0].get("id", contracts[0].get("contractId", symbol)))
+                    self.contract_ids[symbol] = cid
+                    logger.info(f"🔗 {symbol} → contract_id={cid}")
+                else:
+                    self.contract_ids[symbol] = symbol  # fallback (will likely fail)
+                    logger.warning(f"⚠️  No contract found for {symbol}, using symbol as ID")
+            except Exception as exc:
+                self.contract_ids[symbol] = symbol
+                logger.warning(f"⚠️  Contract lookup failed for {symbol}: {exc}")
 
         # ── Supabase ───────────────────────────────────────────────────────
         self._init_supabase()
@@ -372,9 +397,10 @@ class MarketDataOrchestrator:
 
     async def _process_instrument(self, symbol: str) -> dict:
         """Fetch bars, run strategy state machine, fire entry if BOS confirmed."""
-        cfg  = MULTI_INSTRUMENT_CONFIG.get(symbol, {})
-        tf   = self.strategy_timeframes.get(self.active_strategy_name, "1m")
-        bars = await self.api.get_bars(symbol, time_frame=tf, limit=BAR_HISTORY)
+        cfg         = MULTI_INSTRUMENT_CONFIG.get(symbol, {})
+        tf          = self.strategy_timeframes.get(self.active_strategy_name, "1m")
+        contract_id = self.contract_ids.get(symbol, symbol)
+        bars        = await self.api.get_bars(contract_id, time_frame=tf, limit=BAR_HISTORY)
 
         if not bars or len(bars) < 20:
             logger.debug(f"⚠️  {symbol}: insufficient bars ({len(bars) if bars else 0})")
@@ -490,7 +516,7 @@ class MarketDataOrchestrator:
 
         # ── Step A: Market entry for full qty ──────────────────────────────
         entry_order = await self.api.place_order(
-            contract_id=symbol,
+            contract_id=self._cid(symbol),
             side=entry_side,
             quantity=qty,
             order_type="MARKET",
@@ -548,7 +574,7 @@ class MarketDataOrchestrator:
 
         # SL — full position qty
         sl_order = await self.api.place_order(
-            contract_id=symbol,
+            contract_id=self._cid(symbol),
             side=close_side,
             quantity=qty,
             order_type="STOP",
@@ -560,7 +586,7 @@ class MarketDataOrchestrator:
         tp1_order = None
         if tp1_qty > 0:
             tp1_order = await self.api.place_order(
-                contract_id=symbol,
+                contract_id=self._cid(symbol),
                 side=close_side,
                 quantity=tp1_qty,
                 order_type="LIMIT",
@@ -572,7 +598,7 @@ class MarketDataOrchestrator:
         tp2_order = None
         if tp2_qty > 0:
             tp2_order = await self.api.place_order(
-                contract_id=symbol,
+                contract_id=self._cid(symbol),
                 side=close_side,
                 quantity=tp2_qty,
                 order_type="LIMIT",
@@ -584,7 +610,7 @@ class MarketDataOrchestrator:
         tp3_order = None
         if tp3_qty > 0:
             tp3_order = await self.api.place_order(
-                contract_id=symbol,
+                contract_id=self._cid(symbol),
                 side=close_side,
                 quantity=tp3_qty,
                 order_type="LIMIT",
@@ -753,7 +779,7 @@ class MarketDataOrchestrator:
 
         if new_sl_qty > 0:
             new_sl_order = await self.api.place_order(
-                contract_id=symbol,
+                contract_id=self._cid(symbol),
                 side=close_side,
                 quantity=new_sl_qty,
                 order_type="STOP",
@@ -789,7 +815,7 @@ class MarketDataOrchestrator:
         remaining = trade.get("qty_remaining", trade["qty"])
         if remaining > 0:
             await self.api.place_order(
-                contract_id=symbol,
+                contract_id=self._cid(symbol),
                 side=close_side,
                 quantity=remaining,
                 order_type="MARKET",
@@ -809,7 +835,7 @@ class MarketDataOrchestrator:
             return
 
         # Fetch last matching trade from ProjectX for exit fill price
-        recent_trades = await self.api.search_trades(contract_id=symbol, limit=5)
+        recent_trades = await self.api.search_trades(contract_id=self._cid(symbol), limit=5)
         exit_price = trade["entry_price"]   # fallback
         strategy_prefix = trade.get("strategy", "DTR")
         for t in recent_trades:
