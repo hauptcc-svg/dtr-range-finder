@@ -498,6 +498,8 @@ export function Dashboard() {
   const queryClient = useQueryClient();
   const [claudeResult, setClaudeResult] = useState<ClaudeResult | null>(null);
   const [activeAccountId, setActiveAccountId] = useState<string>("");
+  // Immediately-known balance after account switch (avoids waiting 60s for next tick)
+  const [overrideBalance, setOverrideBalance] = useState<number | null>(null);
   const [activeTimeframe, setActiveTimeframe] = useState<string>("1m");
   // Optimistic mode: set immediately on click, cleared once server confirms
   const [pendingMode, setPendingMode] = useState<string | null>(null);
@@ -610,8 +612,13 @@ export function Dashboard() {
   const sessionLabel = activeStrategy === "XXX" ? "London+NY (01:00–17:00)" : "2AM + 9AM (NY)";
   const hasOpenTrades = ((agentStatus as unknown as Record<string, unknown>)?.open_trades as number ?? 0) > 0;
 
-  // Balance comes directly from status response (refreshed every tick from ProjectX)
-  const accountBalance = ext?.accountBalance ?? ext?.availableAccounts?.find(a => a.id === activeAccountId)?.balance ?? null;
+  // Balance priority: 1) override set immediately on account switch, 2) per-account from
+  // availableAccounts list (populated on boot), 3) server tick value (lags up to 60s)
+  const accountBalance =
+    overrideBalance ??
+    ext?.availableAccounts?.find(a => a.id === activeAccountId)?.balance ??
+    ext?.accountBalance ??
+    null;
   // Drawdown = daily PnL when negative
   const drawdown = agentStatus.dailyPnl < 0 ? agentStatus.dailyPnl : 0;
 
@@ -783,7 +790,13 @@ export function Dashboard() {
             accounts={ext.availableAccounts}
             activeAccountId={activeAccountId}
             isAuthenticated={isAuthenticated}
-            onAccountChange={setActiveAccountId}
+            onAccountChange={(id, balance) => {
+              setActiveAccountId(id);
+              // Show the new account's balance immediately (don't wait 60s for next tick)
+              setOverrideBalance(balance ?? null);
+              // Also force a status refetch so everything else updates
+              queryClient.invalidateQueries({ queryKey: getGetAgentStatusQueryKey() });
+            }}
           />
         )}
 

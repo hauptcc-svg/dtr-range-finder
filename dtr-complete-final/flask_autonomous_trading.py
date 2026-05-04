@@ -651,20 +651,30 @@ def select_account():
     if loop is None or not loop.is_running():
         return jsonify({"success": False, "error": "Orchestrator event loop not ready"}), 503
 
+    async def _switch_and_fetch(aid: str):
+        switched = await orchestrator.set_active_account(aid)
+        if not switched:
+            return None
+        # Immediately fetch the new account's balance so frontend doesn't wait 60s
+        summary = await orchestrator.api.get_account_summary()
+        return summary
+
     future = asyncio.run_coroutine_threadsafe(
-        orchestrator.set_active_account(account_id),
+        _switch_and_fetch(account_id),
         loop,
     )
     try:
-        result = future.result(timeout=10)
+        summary = future.result(timeout=10)
     except Exception as exc:
         logger.error(f"❌ select_account error: {exc}", exc_info=True)
         return jsonify({"success": False, "error": str(exc)}), 500
 
-    if result:
+    if summary is not None:
         return jsonify({
             "success":           True,
             "active_account_id": account_id,
+            "balance":           summary.get("balance"),
+            "equity":            summary.get("equity"),
             "message":           f"Active account switched to {account_id}",
         })
     return jsonify({"success": False, "error": "Failed to switch account"}), 500

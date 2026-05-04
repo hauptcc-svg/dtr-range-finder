@@ -14,7 +14,7 @@ interface AccountSelectorProps {
   accounts: Account[];
   activeAccountId: string;
   isAuthenticated: boolean;
-  onAccountChange: (accountId: string) => void;
+  onAccountChange: (accountId: string, balance?: number) => void;
 }
 
 const LS_KEY = "dtr_account_selector_expanded";
@@ -45,7 +45,9 @@ export function AccountSelector({ accounts, activeAccountId, isAuthenticated, on
       });
       const data = await res.json();
       if (data.success) {
-        onAccountChange(accountId);
+        // Pass balance back so dashboard can update instantly (no 60s tick wait)
+        const selectedAcc = accounts.find(a => a.id === accountId);
+        onAccountChange(accountId, data.balance ?? selectedAcc?.balance);
         // Stay expanded so Craig can see the new active account highlighted
       } else {
         setError(data.error ?? "Failed to switch account");
