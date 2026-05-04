@@ -1,4 +1,4 @@
-# Session Handover — 2026-05-04 (session 2)
+# Session Handover — 2026-05-04 (session 3)
 
 ## Current state
 
@@ -14,14 +14,49 @@
 | Account selector | ✅ Fixed — collapse/expand, shows with 1+ accounts |
 | Manual trade endpoint | ✅ Fixed — uses contract_ids not instruments |
 | Contract search (IDs) | ✅ Fixed — MNQ/MYM/MGC resolve to CON.F.US.* |
-| Bar history (OHLCV) | ❌ BLOCKED — errorCode=1 from TopstepX (see below) |
+| TradingView webhook | ✅ Live — POST /api/webhook/tradingview, WEBHOOK_SECRET set |
+| MESM26 (Micro S&P) | ✅ Added to INSTRUMENTS + symbol map |
+| MYMM26 point_value | ✅ Corrected to $0.50 (was $12.50) |
+| MCLN26 (crude oil) | ✅ Updated from expired MCLK26 → MCLN26 |
+| Bar history (OHLCV) | ❌ BLOCKED — errorCode=1, re-test during market hours |
 | LAST PRICE / RANGE | ❌ Shows "---" / 0.00 — depends on bars |
-| Strategy | ❌ HALT — needs bars working first |
-| MCLK26 (MCL crude) | ❌ Not found by search — expired contract |
+| Strategy auto-trading | ❌ HALT — needs bars confirmed first |
 
 ---
 
-## What was done this session
+## What was done this session (session 3 — TradingView webhook)
+
+### 1. TradingView webhook endpoint
+- Added `POST /api/webhook/tradingview` to `flask_autonomous_trading.py`
+- Validates `WEBHOOK_SECRET` (env var) — rejects with 401 if wrong/missing
+- Accepts `symbol`, `side`, `quantity`, `comment` in JSON body
+- Maps CFD/TV tickers to TopstepX contract symbols via `_TV_SYMBOL_MAP`
+- Same async thread-safe order placement as manual-order endpoint
+- Live test confirmed: `{"error":"Invalid limit price. Limit price not set."}` — correct broker response outside market hours; auth + routing working
+
+### 2. Symbol map — comprehensive CFD/futures aliases
+Covers all pairs visible in Craig's TradingView watchlist:
+- NAS100, USTEC, US100, NDX, MNQ1! → MNQM26
+- US30, WS30, DJ30, MYM1! → MYMM26
+- XAUUSD, GOLD, GC1!, MGC1! → MGCM26
+- WTI, USOIL, OIL, CL1!, MCL1! → MCLN26
+- US500, SPX500, SP500, ES1!, MES1! → MESM26
+
+### 3. MESM26 (Micro S&P 500) added
+- Added to `INSTRUMENTS` dict in `market_data_orchestrator.py` ($5.00/point)
+- Included in `_TV_SYMBOL_MAP` for all common TV aliases
+
+### 4. Point value + symbol fixes
+- MYMM26 point_value corrected: $0.50 (was $12.50 — full-size YM mistake)
+- INSTRUMENTS updated: MCLK26 (expired May crude) → MCLN26 (July crude)
+
+### 5. Committed + deployed
+- Commit `5e38dbb` pushed to GitHub → Railway auto-deployed
+- Craig set `WEBHOOK_SECRET` in Railway env vars
+
+---
+
+## What was done previous session (session 2)
 
 ### 1. AccountSelector — collapse/expand + visibility fix
 - Added `ChevronDown`/`ChevronUp` toggle, collapsed by default, state persisted in `localStorage`
@@ -121,20 +156,24 @@ MCLK26 = Micro Crude Oil May 2026 futures — this contract expired around May 2
 
 ## Immediate next steps (priority order)
 
-1. **During market hours (10am–3pm ET weekday)**, hit the debug endpoint and confirm bars:
+1. **Set up TradingView alerts** for each instrument:
+   - Webhook URL: `https://dtr-range-finder-production.up.railway.app/api/webhook/tradingview`
+   - Message body: `{"secret":"YOURREAL SECRET","symbol":"NAS100","side":"{{strategy.order.action}}","quantity":1,"comment":"{{strategy.order.comment}}"}`
+   - Condition: `alert() function calls only`
+   - Repeat for US30, XAUUSD, WTI using their respective symbol values
+
+2. **During market hours (10am–3pm ET weekday)**, confirm bars are working:
    `https://dtr-range-finder-production.up.railway.app/api/debug/contracts`
-   → If `bars_returned > 0`: market data is working, proceed to step 3.
-   → If still `errorCode: 1`: contact TopstepX support re: Combine API data access.
+   → If `bars_returned > 0`: DTR auto-strategy can now be activated.
+   → If still `errorCode: 1`: contact TopstepX re: Combine REST API data access.
 
-2. **Update MCLK26 → MCLN26** in `multi_instrument_config.py` (MCL crude oil symbol expired)
+3. **Click DTR on the dashboard** once bars confirmed — activates autonomous strategy
 
-3. **Click DTR on the dashboard** to activate strategy once bars are confirmed working
-
-4. **Verify Telegram** — send `/help` to `@decanatorfxbot`. Should reply with command list.
-   - Check Railway env: `TELEGRAM_BOT_TOKEN=8396207281:AAEa...` (old `.replit` token is expired — do NOT use it)
+4. **Verify Telegram** — send `/help` to `@decanatorfxbot`
+   - Railway env `TELEGRAM_BOT_TOKEN=8396207281:AAEa...` (NOT the old .replit token)
    - Chat ID = `332762243` (@cchaos21)
 
-5. **Monitor forward test** — Railway logs + Telegram notifications for trade entries
+5. **Monitor first live trades** via Railway logs + Telegram notifications
 
 ---
 
@@ -161,12 +200,19 @@ MCLK26 = Micro Crude Oil May 2026 futures — this contract expired around May 2
 | Debug contracts/bars | https://dtr-range-finder-production.up.railway.app/api/debug/contracts |
 | Telegram bot | @decanatorfxbot (Craig's chat: @cchaos21, ID: 332762243) |
 
-## Key files changed this session
+## Key files changed this session (session 3)
 
 | File | What changed |
 |------|-------------|
-| `dtr-complete-final/flask_autonomous_trading.py` | Global JSON error handler, /api/debug/contracts endpoint (bar probe + search), /api/accounts/select returns balance, manual-order uses contract_ids |
+| `dtr-complete-final/flask_autonomous_trading.py` | Added POST /api/webhook/tradingview + _TV_SYMBOL_MAP (50+ aliases) |
+| `dtr-complete-final/market_data_orchestrator.py` | Added MESM26, fixed MYMM26 point_value ($0.50), MCLK26→MCLN26 |
+
+## Key files changed previous session (session 2)
+
+| File | What changed |
+|------|-------------|
+| `dtr-complete-final/flask_autonomous_trading.py` | Global JSON error handler, /api/debug/contracts, /api/accounts/select returns balance, manual-order uses contract_ids |
 | `dtr-complete-final/projectx_api.py` | 3-tier account matching, search_contracts live=False, get_bars: endTime required + unit=2 + bars=null handling |
 | `dtr-complete-final/market_data_orchestrator.py` | 3-tier account matching on boot, syncs api.account_id to real API id |
-| `artifacts/dtr-dashboard/src/components/account-selector.tsx` | Collapse/expand toggle, localStorage persist, balance preview when collapsed, onAccountChange passes balance |
-| `artifacts/dtr-dashboard/src/pages/dashboard.tsx` | overrideBalance state, AccountSelector visibility fix (>=1), onAccountChange sets overrideBalance + invalidates query |
+| `artifacts/dtr-dashboard/src/components/account-selector.tsx` | Collapse/expand toggle, localStorage persist, balance preview when collapsed |
+| `artifacts/dtr-dashboard/src/pages/dashboard.tsx` | overrideBalance state, AccountSelector visibility fix (>=1) |

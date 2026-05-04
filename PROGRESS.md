@@ -115,10 +115,30 @@
 [x] Fixed bars=null handling: replaced .get("bars", []) with .get("bars") or [] (API returns null key, not missing key)
 [x] MCLK26 (May crude oil) not found by search — expired contract, needs updating to MCLN26 (July) or similar
 
+## 2026-05-04 (session 3 — TradingView webhook)
+
+[x] Added POST /api/webhook/tradingview endpoint to flask_autonomous_trading.py
+    - Validates WEBHOOK_SECRET (env var) from body or X-Webhook-Secret header
+    - Maps TradingView/CFD tickers → TopstepX contract symbols
+    - Places MARKET order via same async thread-safe pattern as manual-order
+    - Returns broker error message on rejection (e.g. market closed)
+[x] Expanded _TV_SYMBOL_MAP to cover Pepperstone CFD names + futures codes:
+    NAS100/USTEC/US100/NDX → MNQM26
+    US30/WS30/DJ30 → MYMM26
+    XAUUSD/GOLD/GC1! → MGCM26
+    WTI/USOIL/OIL/CL1! → MCLN26
+    US500/SPX500/SP500/ES1!/MES1! → MESM26
+[x] Added MESM26 (Micro S&P 500, $5/point) to INSTRUMENTS dict in orchestrator
+[x] Fixed MYMM26 point_value: $0.50/point (was incorrectly $12.50 — that's full-size YM)
+[x] MCLK26 → MCLN26 updated in orchestrator INSTRUMENTS (expired May contract → July)
+[x] Live webhook test confirmed: auth ✅, symbol mapping ✅, broker reachable ✅
+    Response: {"error":"Invalid limit price. Limit price not set."} — expected outside market hours
+[x] Committed + pushed to GitHub → Railway auto-deployed
+[x] Craig added WEBHOOK_SECRET to Railway env vars
+
 ## Outstanding
-[ ] Bar history still returns errorCode=1, success=false — unconfirmed whether market hours issue or Combine account restriction
-    - All request params now correct (endTime, unit=2, live=True, contract IDs resolved)
-    - Must re-test during confirmed US market hours (10am–3pm ET weekday)
-[ ] MCLK26 symbol needs updating to current front-month crude oil contract
-[ ] Click DTR on dashboard to start strategy (only after bars confirmed working)
+[ ] Bar history errorCode=1 — re-test during confirmed market hours (10am–3pm ET weekday)
+    Hit: https://dtr-range-finder-production.up.railway.app/api/debug/contracts
 [ ] Verify @decanatorfxbot responds to /help in Telegram
+[ ] Set up TradingView alerts with webhook URL + JSON message body
+[ ] Forward test: monitor Railway logs + Telegram for trade entries at market open
