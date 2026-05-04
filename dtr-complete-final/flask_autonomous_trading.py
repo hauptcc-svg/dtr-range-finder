@@ -671,6 +671,7 @@ def debug_contracts():
             for unit_val in [2]:
                 try:
                     await orchestrator.api.refresh_token_if_needed()
+                    acc_id = orchestrator.active_account_id or orchestrator.api.account_id
                     body = {
                         "contractId": cid,
                         "live": True,
@@ -680,6 +681,8 @@ def debug_contracts():
                         "startTime": start_utc,
                         "endTime": end_utc,
                         "includePartialBar": False,
+                        # Some history endpoints require accountId
+                        "accountId": int(acc_id) if str(acc_id).isdigit() else acc_id,
                     }
                     import aiohttp as _aiohttp
                     async with orchestrator.api.session.post(
