@@ -107,11 +107,13 @@ class ProjectXAPI:
     # ═══════════════════════════════════════════════════════════════════════
 
     async def get_accounts(self) -> List[Dict[str, Any]]:
+        """Fetch all active accounts. TopstepX /api/Account/search is a POST endpoint."""
         try:
             await self.refresh_token_if_needed()
-            async with self.session.get(
+            # TopstepX uses POST for all search endpoints — GET returns HTML
+            async with self.session.post(
                 f"{self.base_url}/api/Account/search",
-                params={"onlyActive": "true"},
+                json={"onlyActive": True},
                 headers=self._get_headers(),
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
@@ -127,7 +129,11 @@ class ProjectXAPI:
                     # If the response itself is a list, use it directly
                     if not accounts and isinstance(data, list):
                         accounts = data
-                    self.logger.info(f"🏦 get_accounts raw keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}, found {len(accounts)} account(s)")
+                    self.logger.info(
+                        f"🏦 get_accounts: HTTP {resp.status}, "
+                        f"keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}, "
+                        f"found {len(accounts)} account(s)"
+                    )
                     return accounts
                 else:
                     raw = await resp.text()

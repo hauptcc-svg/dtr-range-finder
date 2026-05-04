@@ -602,14 +602,19 @@ def debug_account():
             return {"error": "API not initialised"}
         await api.refresh_token_if_needed()
         try:
-            async with api.session.get(
+            # POST — same as get_accounts() fix
+            async with api.session.post(
                 f"{api.base_url}/api/Account/search",
-                params={"onlyActive": "true"},
+                json={"onlyActive": True},
                 headers=api._get_headers(),
                 timeout=_aiohttp.ClientTimeout(total=15),
             ) as resp:
-                body = await resp.json()
-                return {"status": resp.status, "body": body}
+                content_type = resp.headers.get("Content-Type", "")
+                try:
+                    body = await resp.json(content_type=None)
+                except Exception:
+                    body = await resp.text()
+                return {"status": resp.status, "content_type": content_type, "body": body}
         except Exception as exc:
             return {"error": str(exc)}
 
