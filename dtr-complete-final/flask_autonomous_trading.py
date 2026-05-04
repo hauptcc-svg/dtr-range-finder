@@ -818,6 +818,18 @@ def set_strategy_timeframe(name: str):
 # Health check
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.errorhandler(Exception)
+def handle_exception(exc):
+    """Return JSON for all unhandled exceptions — never return HTML to the React frontend."""
+    logger.error(f"❌ Unhandled exception: {exc}", exc_info=True)
+    return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.errorhandler(404)
+def handle_404(exc):
+    return jsonify({"success": False, "error": "Endpoint not found"}), 404
+
+
 @app.route("/health")
 def health():
     return jsonify({
@@ -1368,14 +1380,18 @@ def manual_order():
     if orchestrator.api is None:
         return jsonify({"success": False, "error": "Not connected to broker"}), 503
 
-    # Look up contract_id from orchestrator instruments
-    instr = orchestrator.instruments.get(symbol)
-    if not instr:
+    # Validate symbol is a known instrument
+    from multi_instrument_config import MULTI_INSTRUMENT_CONFIG as _cfg
+    if symbol not in _cfg and symbol not in orchestrator.contract_ids:
         return jsonify({"success": False, "error": f"Unknown instrument: {symbol}"}), 404
 
-    contract_id = getattr(instr, "contract_id", None) or getattr(instr, "contractId", None)
+    # Get numeric contract ID resolved at boot (falls back to symbol if not yet resolved)
+    contract_id = orchestrator.contract_ids.get(symbol)
     if not contract_id:
-        return jsonify({"success": False, "error": f"No contractId for {symbol}"}), 500
+        return jsonify({
+            "success": False,
+            "error": f"Contract ID for {symbol} not yet resolved — wait 60s for orchestrator to boot",
+        }), 503
 
     loop = getattr(orchestrator, "_loop", None)
     try:
