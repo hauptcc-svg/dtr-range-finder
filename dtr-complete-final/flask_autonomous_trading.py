@@ -1517,9 +1517,12 @@ def manual_order():
         logger.error(f"❌ manual_order error: {exc}")
         return jsonify({"success": False, "error": str(exc)}), 500
 
-    if result:
-        return jsonify({"success": True, "message": f"{side} {quantity} {symbol} placed"})
-    return jsonify({"success": False, "error": "Order placement failed"}), 500
+    if result and result.get("success", True):
+        logger.info(f"✅ manual_order: {side} {quantity} {symbol} → orderId={result.get('orderId')}")
+        return jsonify({"success": True, "message": f"{side} {quantity} {symbol} placed", "orderId": result.get("orderId")})
+    broker_error = (result or {}).get("errorMessage") or (result or {}).get("message") or "Order rejected by broker"
+    logger.error(f"❌ manual_order: broker rejected {side} {quantity} {symbol}: {broker_error}")
+    return jsonify({"success": False, "error": broker_error}), 400
 
 
 # ─────────────────────────────────────────────────────────────────────────────

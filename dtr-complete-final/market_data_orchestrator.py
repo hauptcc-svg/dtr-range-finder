@@ -292,14 +292,21 @@ class MarketDataOrchestrator:
         for symbol in INSTRUMENTS:
             try:
                 contracts = await self.api.search_contracts(symbol)
+                if not contracts:
+                    # Exact symbol not listed yet (e.g. MCLN26 before July rolls on).
+                    # Retry with the 3-char root to find the current front-month.
+                    root = symbol[:3]
+                    logger.warning(f"⚠️  No contract for {symbol}, retrying with root '{root}'")
+                    contracts = await self.api.search_contracts(root)
                 if contracts:
                     # Pick first exact or closest match
                     cid = str(contracts[0].get("id", contracts[0].get("contractId", symbol)))
+                    name = contracts[0].get("name", contracts[0].get("description", cid))
                     self.contract_ids[symbol] = cid
-                    logger.info(f"🔗 {symbol} → contract_id={cid}")
+                    logger.info(f"🔗 {symbol} → contract_id={cid} ({name})")
                 else:
                     self.contract_ids[symbol] = symbol  # fallback (will likely fail)
-                    logger.warning(f"⚠️  No contract found for {symbol}, using symbol as ID")
+                    logger.warning(f"⚠️  No contract found for {symbol} or root, using symbol as ID")
             except Exception as exc:
                 self.contract_ids[symbol] = symbol
                 logger.warning(f"⚠️  Contract lookup failed for {symbol}: {exc}")

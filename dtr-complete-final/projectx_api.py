@@ -357,7 +357,10 @@ class ProjectXAPI:
             ) as resp:
                 if resp.status in [200, 201]:
                     order = await resp.json()
-                    self.logger.info(f"✅ Order placed: {order}")
+                    if not order.get("success", True):
+                        self.logger.error(f"❌ Broker rejected order: {order.get('errorMessage') or order}")
+                        return order  # return so caller can read errorMessage
+                    self.logger.info(f"✅ Order placed: orderId={order.get('orderId')} response={order}")
                     return order
                 else:
                     error = await resp.text()
