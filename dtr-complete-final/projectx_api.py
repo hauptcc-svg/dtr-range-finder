@@ -331,7 +331,8 @@ class ProjectXAPI:
         try:
             await self.refresh_token_if_needed()
 
-            type_map = {"MARKET": 1, "LIMIT": 2, "STOP": 3, "STOP_LIMIT": 4}
+            # TopstepX order type codes: 1=Limit, 2=Market, 4=StopMarket, 5=StopLimit
+            type_map = {"MARKET": 2, "LIMIT": 1, "STOP": 4, "STOP_LIMIT": 5}
             side_map = {"BUY": 0, "LONG": 0, "SELL": 1, "SHORT": 1}
 
             import time as _time
