@@ -777,18 +777,15 @@ export function Dashboard() {
           </Card>
         </div>
 
-        {/* Account Selector */}
-        {(() => {
-          if (!ext?.availableAccounts || ext.availableAccounts.length <= 1) return null;
-          return (
-            <AccountSelector
-              accounts={ext.availableAccounts}
-              activeAccountId={activeAccountId}
-              isAuthenticated={isAuthenticated}
-              onAccountChange={setActiveAccountId}
-            />
-          );
-        })()}
+        {/* Account Selector — show whenever at least 1 account is known */}
+        {ext?.availableAccounts && ext.availableAccounts.length >= 1 && (
+          <AccountSelector
+            accounts={ext.availableAccounts}
+            activeAccountId={activeAccountId}
+            isAuthenticated={isAuthenticated}
+            onAccountChange={setActiveAccountId}
+          />
+        )}
 
         {/* 3. Risk Controls */}
         {isAuthenticated && <RiskControlsCard />}
