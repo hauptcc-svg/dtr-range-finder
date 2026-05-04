@@ -211,21 +211,34 @@ class ProjectXAPI:
         from_time: Optional[str] = None,
         to_time: Optional[str] = None
     ) -> Optional[List[Dict[str, Any]]]:
+        """Fetch OHLCV bars from TopstepX.
+
+        API notes (from validation errors):
+        - endTime is REQUIRED (not optional). Always pass current UTC time.
+        - startTime is required to define the window.
+        - unit=2 = Minute bars (1=Second, 2=Minute, 3=Hour, 4=Day)
+        - live=True is required to get real market data on Combine accounts.
+        """
         try:
             await self.refresh_token_if_needed()
-            # TopstepX Combine accounts require live=True to get real market data
+
+            now_utc = datetime.utcnow()
+            end_iso   = to_time   or now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Default start = 8 hours back (enough to cover pre-market + session)
+            start_iso = from_time or (now_utc - timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # unit values: 1=Second, 2=Minute, 3=Hour, 4=Day
+            # Always use minute bars (unit=2, unitNumber=1)
             body = {
                 "contractId": int(contract_id) if str(contract_id).isdigit() else contract_id,
                 "live": True,
-                "limit": limit,
-                "unit": 1,
+                "unit": 2,
                 "unitNumber": 1,
+                "limit": limit,
+                "startTime": start_iso,
+                "endTime": end_iso,
                 "includePartialBar": False,
             }
-            if from_time:
-                body["startTime"] = from_time
-            if to_time:
-                body["endTime"] = to_time
 
             async with self.session.post(
                 f"{self.base_url}/api/History/retrieveBars",
@@ -238,13 +251,17 @@ class ProjectXAPI:
                     bars = data.get("bars", [])
                     if not bars:
                         self.logger.warning(
-                            f"⚠️  get_bars({contract_id}): 0 bars returned. "
-                            f"Response keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}"
+                            f"⚠️  get_bars({contract_id}): 0 bars. "
+                            f"window={start_iso}→{end_iso}, "
+                            f"response_keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}, "
+                            f"full={data}"
                         )
+                    else:
+                        self.logger.info(f"✅ get_bars({contract_id}): {len(bars)} bars, latest_close={bars[-1].get('c')}")
                     return bars
                 else:
                     raw = await resp.text()
-                    self.logger.error(f"❌ get_bars HTTP {resp.status} for {contract_id}: {raw[:300]}")
+                    self.logger.error(f"❌ get_bars HTTP {resp.status} for {contract_id}: {raw[:500]}")
                     return None
         except Exception as e:
             self.logger.error(f"❌ Error getting bars for {contract_id}: {e}")

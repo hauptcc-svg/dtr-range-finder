@@ -664,10 +664,11 @@ def debug_contracts():
         )
         if first_resolved:
             sym, cid = first_resolved
-            # Probe unit values 1–5 with live=True and a 6-hour window
             now_utc = datetime.now(timezone.utc)
-            start_utc = (now_utc - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            for unit_val in [1, 2, 3, 4, 5]:
+            end_utc   = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+            start_utc = (now_utc - timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Test unit=2 (Minute) with required endTime
+            for unit_val in [2]:
                 try:
                     await orchestrator.api.refresh_token_if_needed()
                     body = {
@@ -677,6 +678,7 @@ def debug_contracts():
                         "unitNumber": 1,
                         "limit": 10,
                         "startTime": start_utc,
+                        "endTime": end_utc,
                         "includePartialBar": False,
                     }
                     import aiohttp as _aiohttp
@@ -693,7 +695,7 @@ def debug_contracts():
                             "http_status": resp.status,
                             "bars_returned": len(bars),
                             "latest_close": bars[-1].get("c") if bars else None,
-                            "full_response": raw,  # full raw to see errors
+                            "full_response": raw,
                         }
                 except Exception as exc:
                     bar_probe[f"unit_{unit_val}"] = {"error": str(exc)}
