@@ -61,3 +61,33 @@
 [x] Telegram bot commands: /status /pnl /positions /halt /resume
 [x] Registered Telegram webhook at https://dtr-range-finder-production.up.railway.app/api/telegram/webhook
 [x] Confirmed Telegram connectivity (test message delivered to @cchaos21)
+
+## 2026-05-04
+
+[x] Fixed mode buttons (DTR/XXX/AI MODE/HALT) — were unclickable/invisible in dark mode
+    - Added `pendingMode` optimistic state for instant visual feedback on click
+    - Fixed activeMode default from "DTR" → "" (no button pre-selected until backend confirms)
+    - Added hover:border/text styles to authenticated inactive buttons
+    - Added amber hint text "← Select a mode, then click START" when no mode selected
+    - Buttons disabled while pendingMode != null (prevents double-click)
+[x] Added `mode` + `activeStrategy` fields to GET /api/agent/status response
+[x] Fixed Risk Controls fields showing empty — GET /api/agent/settings now returns camelCase
+    keys (dailyLossLimit, dailyProfitTarget, maxTradesPerDay, maxLossesPerDirection)
+    matching the React RiskSettings interface (was snake_case, causing undefined in all inputs)
+[x] Fixed Risk Controls save having no effect — POST /api/agent/settings now reads camelCase
+    keys (dailyLossLimit, dailyProfitTarget) sent by the frontend (was looking for snake_case)
+[x] Risk settings now persist across Railway deploys via Supabase platform_settings table
+    - Upserted on every save; loaded on boot (Supabase overlay wins over JSON + env vars)
+    - platform_settings table created in Supabase with seed row { daily_loss_limit: 200, ... }
+    - Railway filesystem wipe on deploy no longer resets risk controls
+[x] Fixed zero market data — orchestrator now resolves ticker → numeric contract IDs on boot
+    - TopstepX API requires numeric IDs, not symbols like "MNQM26"
+    - search_contracts(symbol) called for all 4 instruments in start(); IDs stored in self.contract_ids
+    - Added _cid(symbol) helper; all API calls use self._cid(symbol) instead of bare symbol
+[x] Fixed account balance showing "---" — get_accounts() was using GET, TopstepX requires POST
+    - Every TopstepX search endpoint uses POST; GET returns HTML (wrong MIME type)
+    - Changed to POST /api/Account/search with json={"onlyActive": True}
+    - Added multi-key fallback: tries "accounts" → "data" → "result" → direct list
+[x] Added GET /api/debug/account endpoint — returns raw TopstepX response for balance diagnosis
+[x] Added periodic account refresh every 5 ticks (~5 min) in orchestrator _tick()
+[x] Added accountBalance, activeAccountId, availableAccounts to /api/agent/status response

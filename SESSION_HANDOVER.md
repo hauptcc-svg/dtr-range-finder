@@ -1,53 +1,104 @@
-# Session Handover — 2026-05-03
+# Session Handover — 2026-05-04
 
 ## What was done this session
 
-- **Full dashboard UI overhaul** — Bloomberg Terminal meets modern SaaS aesthetic
-  - Account stats bar: Balance, Drawdown, Realized P&L, Unrealized P&L as stat pills
-  - Open Trades inline on dashboard with compact table + CLOSE buttons (polls 3s)
-  - Layout reorder: Stats → (SystemStatus + OpenTrades) → RiskControls → Instruments → EquityCurve
-  - Daily Target Progress and Hermes Report moved to new `/analytics` page
-- **Analytics page** (`/analytics`) — PnlProgress bar, daily stats, Hermes Report with period selector (7D/30D/ALL) + inline generator
-- **ManualTradeWidget** on each instrument card — qty ±1–10, BUY (green) / SELL (red) buttons, 4s inline feedback
-- **Contracts-per-instrument** section in Risk Controls — per-symbol qty adjuster saved to `MULTI_INSTRUMENT_CONFIG` via `POST /api/agent/settings { instrument_qty: {...} }`
-- **POST /api/agent/manual-order** — new backend endpoint, places MARKET order via ProjectX API
-- **Inter font** — replaced terminal monospace with Inter across all 277 usages; JetBrains Mono preserved as `--app-font-data` for numeric displays
-- **Mobile responsive** — `overflow-x-hidden` at layout root; Open Trades and Trade History tables hide non-essential columns at <640px
-- **Mobile bottom nav** — fixed 64px bar on mobile with Dashboard / Analytics / Trade History links
-- **Telegram bot commands** — `/status`, `/pnl`, `/positions`, `/halt`, `/resume` wired to Flask endpoint `POST /api/telegram/webhook`
-- **Telegram webhook registered** — `https://dtr-range-finder-production.up.railway.app/api/telegram/webhook` confirmed live (`{"ok":true}`)
-- **Telegram connectivity verified** — test message delivered to @cchaos21 (chat ID 332762243) using token from `.env`
+### 1. Mode buttons (DTR / XXX / AI MODE / HALT) — fully fixed
+- Added `pendingMode` optimistic state: clicking a button shows it as active instantly, no wait for backend
+- Fixed `activeMode` default (`"DTR"` → `""`) so no button appears pre-selected until server confirms
+- Added hover styles to authenticated inactive buttons (`hover:border-foreground/60 hover:text-foreground`)
+- Amber hint text "← Select a mode, then click START" shown when no mode is active
+- `mode` and `activeStrategy` fields added to `/api/agent/status` response so frontend reads real state
+
+### 2. Risk Controls input fields — fully fixed
+- **Root cause**: `GET /api/agent/settings` returned snake_case (`daily_loss_limit`) but React `RiskSettings` interface expected camelCase (`dailyLossLimit`) → every field was `undefined` → empty inputs
+- GET now returns: `dailyLossLimit`, `dailyProfitTarget`, `maxTradesPerDay`, `maxLossesPerDirection`, `tradingLocked`
+- **Root cause 2**: `POST /api/agent/settings` looked for `daily_loss_limit` but frontend sends `dailyLossLimit` → saves had no effect
+- POST now accepts camelCase (and snake_case for backwards compat)
+
+### 3. Risk settings persistence across Railway deploys — fixed
+- Railway filesystem is ephemeral (wiped on every new deploy) — `risk_settings.json` was lost
+- Added `platform_settings` table in Supabase (key TEXT PRIMARY KEY, value JSONB)
+- Seed row `risk_settings` → `{daily_loss_limit: 200, daily_profit_target: 1400, ...}` inserted
+- On every save: settings written to both local JSON (fast) AND Supabase upsert (durable)
+- On boot: load order is JSON file → Supabase overlay (Supabase values win)
+- Settings now survive Railway deploys permanently
+
+### 4. Market data — fixed (contract ID resolution)
+- **Root cause**: TopstepX API requires numeric contract IDs, not ticker symbols ("MNQM26" fails)
+- On boot, `search_contracts(symbol)` called for all 4 instruments → numeric IDs stored in `self.contract_ids`
+- Added `_cid(symbol)` helper; all API calls now use `self._cid(symbol)` instead of bare symbol
+- Bars should now fetch successfully and strategy state machines should run
+
+### 5. Account balance — fixed
+- **Root cause**: `get_accounts()` used GET `/api/Account/search` — TopstepX requires POST for all search endpoints; GET returns HTML → aiohttp JSON parse error → `available_accounts` always empty
+- Changed to `POST /api/Account/search` with `json={"onlyActive": True}`
+- Added multi-key fallback: tries `accounts` → `data` → `result` → direct list response
+- Added `GET /api/debug/account` endpoint to inspect raw TopstepX response
+- Added `accountBalance`, `activeAccountId`, `availableAccounts` to `/api/agent/status`
+- Periodic account refresh every 5 ticks (~5 min) in orchestrator `_tick()`
+
+## Commits this session
+
+| Hash | Description |
+|------|-------------|
+| `dfbbca5` | Mode buttons + risk persistence (initial) |
+| `f4b2dec` | Contract ID resolution fix |
+| `a2afca2` | Balance fields + optimistic mode UI |
+| `c6cb738` | camelCase API keys + Supabase persistence for risk settings |
+| `c0c1691` | Fix account fetch: POST (not GET) for /api/Account/search |
 
 ## Current state
 
-- **Railway backend:** ✅ Live — https://dtr-range-finder-production.up.railway.app
-- **Vercel frontend:** ✅ Live — https://project-wonf5.vercel.app (deploying latest commits)
-- **Telegram webhook:** ✅ Registered on @decanatorfxbot
-- **Telegram bot commands:** ✅ Deployed — pending Railway redeploy to serve new code
-- **Strategy:** ❌ Still in HALT mode — awaiting market open (Sunday night)
-- **Forward test:** ❌ Not started
+| Component | Status |
+|-----------|--------|
+| Railway backend | ✅ Live — https://dtr-range-finder-production.up.railway.app |
+| Vercel frontend | ✅ Live — https://project-wonf5.vercel.app |
+| Mode buttons | ✅ Fixed — visual + optimistic state |
+| Risk Controls fields | ✅ Fixed — populate from API correctly |
+| Risk settings persistence | ✅ Fixed — Supabase-backed, survives deploys |
+| Market data (bars) | ✅ Fixed — contract IDs resolve on boot |
+| Account balance | ✅ Fixed (latest deploy `c0c1691`) — POST endpoint |
+| Strategy | ❌ HALT mode — needs manual activation at market open |
+| Forward test | ❌ Not started — awaiting market open (Sunday night) |
 
-## Next steps
+## Immediate next steps
 
-1. Verify @decanatorfxbot responds to `/help` in Telegram (Railway redeploy may still be in progress)
-2. Confirm `TELEGRAM_BOT_TOKEN` in Railway Variables matches `.env` token (`8396207281:AAEa...`)
-3. Click **DTR** on the dashboard to activate strategy before Sunday market open
-4. Monitor 2-week forward test — target net positive P&L
-5. At market open: confirm Telegram sends trade entry/exit notifications automatically
+1. **Verify balance** — after Railway redeploys `c0c1691`, hit:
+   `https://dtr-range-finder-production.up.railway.app/api/debug/account`
+   Should show a JSON body with account data. If it does, balance will show on dashboard within 60s.
 
-## Blockers
+2. **Verify Risk Controls** — open https://project-wonf5.vercel.app → authenticate →
+   Risk Controls card should show **200** and **1400** in the input fields
 
-- Market is closed (weekend) — cannot forward test until Sunday night open
-- Telegram bot response (@decanatorfxbot) — may need to verify Railway has the latest deploy
+3. **Verify Telegram** — send `/help` to @decanatorfxbot in Telegram. Should reply with command list.
+   - Check Railway env var: `TELEGRAM_BOT_TOKEN=8396207281:AAEa...` (old .replit token is expired)
 
-## Manual steps required
+4. **Sunday night** — open dashboard, click **DTR** to activate strategy before US markets open
 
-- **Railway env var check**: confirm `TELEGRAM_BOT_TOKEN=8396207281:AAEaYS_juEHqA9L5nEu12DAMFnHeiNSwCJo` is set in Railway Variables (old `.replit` token `8714653890:...` is expired)
-- **Sunday**: open https://project-wonf5.vercel.app, authenticate, click **DTR** to activate strategy
+5. **Monitor forward test** — watch Railway logs + Telegram notifications for trade entries
+
+## Gotchas / known issues
+
+- `AGENT_CONTROL_SECRET` must be set in Railway env vars — dashboard shows ConnectModal until authenticated
+- `risk_settings.json` is still written to Railway filesystem as a fast-path cache, but Supabase is the source of truth across deploys
+- `maxTradesPerDay` and `maxLossesPerDirection` are stored in `_risk_settings` but the orchestrator's per-symbol trade limits still read from `strategy_params_for()` — wiring these to actual strategy params is a future task
+- If `/api/Account/search` still fails after POST fix, check Railway logs for the actual error — there may be an auth token expiry issue on first boot if `refresh_token_if_needed()` doesn't fire before the first tick
+- `XXX` mode sets `mode="DTR"` with `activeStrategy="XXX"` — the frontend button condition for XXX is `activeMode === "DTR" && activeStrategy === "XXX"` which is correct but non-obvious
+
+## Key files changed this session
+
+| File | What changed |
+|------|-------------|
+| `dtr-complete-final/flask_autonomous_trading.py` | camelCase GET response, camelCase POST handler, Supabase load/save helpers, debug/account endpoint, Optional import |
+| `dtr-complete-final/projectx_api.py` | get_accounts() changed from GET to POST, multi-key fallback, detailed logging |
+| `dtr-complete-final/market_data_orchestrator.py` | contract_ids dict, _cid() helper, contract resolution on boot, periodic account refresh |
+| `artifacts/dtr-dashboard/src/pages/dashboard.tsx` | pendingMode state, switchMode with optimistic updates, activeMode from pendingMode, AgentStatusExtended interface, balance/account fields, hover styles on mode buttons |
+| `supabase/migrations/` (applied via MCP) | platform_settings table + seed row |
 
 ## Key URLs
 
 - Railway backend: https://dtr-range-finder-production.up.railway.app
 - Vercel frontend: https://project-wonf5.vercel.app
 - Supabase: https://gphoaubbvimcetlehvmk.supabase.co
-- Telegram bot: @decanatorfxbot (chat ID: 332762243)
+- Debug account endpoint: https://dtr-range-finder-production.up.railway.app/api/debug/account
+- Telegram bot: @decanatorfxbot (Craig's chat ID: 332762243)
