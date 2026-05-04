@@ -793,6 +793,10 @@ def agent_status():
 
     unrealized = sum((p.get("live_pnl") or 0) for p in state.get("open_positions", []))
 
+    # Pull account balance from last dashboard snapshot (updated every tick)
+    account = state.get("account") or {}
+    available_accounts = orchestrator.available_accounts or []
+
     return jsonify({
         "running":                   orchestrator.running,
         "mode":                      orchestrator.mode,
@@ -808,6 +812,10 @@ def agent_status():
         "errorMessage":              orchestrator.halt_reason if orchestrator.halted else None,
         "claudeAutonomousMode":      orchestrator.mode == "CLAUDE+HERMES",
         "lastClaudeAutonomousTick":  None,
+        # Account data for balance display
+        "accountBalance":            account.get("balance"),
+        "activeAccountId":           orchestrator.active_account_id,
+        "availableAccounts":         available_accounts,
     })
 
 

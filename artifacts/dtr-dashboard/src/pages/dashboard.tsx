@@ -480,6 +480,8 @@ interface AgentStatusExtended {
   activeStrategy?: string;
   activeAccountId?: string;
   availableAccounts?: Array<{ id: string; name: string; balance?: number }>;
+  accountBalance?: number | null;
+  mode?: string;
 }
 
 interface ClaudeResult {
@@ -497,6 +499,8 @@ export function Dashboard() {
   const [claudeResult, setClaudeResult] = useState<ClaudeResult | null>(null);
   const [activeAccountId, setActiveAccountId] = useState<string>("");
   const [activeTimeframe, setActiveTimeframe] = useState<string>("1m");
+  // Optimistic mode: set immediately on click, cleared once server confirms
+  const [pendingMode, setPendingMode] = useState<string | null>(null);
 
   const { data: sessionData, isLoading: isLoadingSession, refetch: refetchSession } = useQuery<{ authenticated: boolean }>({
     queryKey: ["agentSession"],
@@ -538,10 +542,19 @@ export function Dashboard() {
     },
   });
 
-  const switchMode = async (endpoint: string) => {
-    const res = await fetch(endpoint, { method: "POST", credentials: "include" });
-    const data = await res.json();
-    if (data.success) queryClient.invalidateQueries({ queryKey: getGetAgentStatusQueryKey() });
+  const switchMode = async (endpoint: string, optimisticMode: string) => {
+    setPendingMode(optimisticMode);
+    try {
+      const res = await fetch(endpoint, { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (data.success) {
+        await queryClient.invalidateQueries({ queryKey: getGetAgentStatusQueryKey() });
+      }
+    } catch {
+      // revert on error
+    } finally {
+      setPendingMode(null);
+    }
   };
 
   const handleStart = () => startAgent.mutate(undefined, {
@@ -591,12 +604,14 @@ export function Dashboard() {
 
   const ext = agentStatus as (typeof agentStatus & AgentStatusExtended);
   const activeStrategy = ext?.activeStrategy ?? "";
-  const activeMode = (agentStatus as unknown as Record<string, unknown>)?.mode as string ?? (agentStatus.claudeAutonomousMode ? "CLAUDE+HERMES" : "");
+  // Use pendingMode for instant visual feedback; fall back to server-confirmed mode
+  const serverMode = ext?.mode ?? (agentStatus.claudeAutonomousMode ? "CLAUDE+HERMES" : "");
+  const activeMode = pendingMode ?? serverMode;
   const sessionLabel = activeStrategy === "XXX" ? "London+NY (01:00–17:00)" : "2AM + 9AM (NY)";
   const hasOpenTrades = ((agentStatus as unknown as Record<string, unknown>)?.open_trades as number ?? 0) > 0;
 
-  // Derive balance from accounts list
-  const accountBalance = ext?.availableAccounts?.find(a => a.id === activeAccountId)?.balance ?? null;
+  // Balance comes directly from status response (refreshed every tick from ProjectX)
+  const accountBalance = ext?.accountBalance ?? ext?.availableAccounts?.find(a => a.id === activeAccountId)?.balance ?? null;
   // Drawdown = daily PnL when negative
   const drawdown = agentStatus.dailyPnl < 0 ? agentStatus.dailyPnl : 0;
 
@@ -656,14 +671,14 @@ export function Dashboard() {
                 <p className="text-[10px] font-mono uppercase text-muted-foreground tracking-widest">Trading Mode</p>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { label: "DTR",     icon: <BarChart2 className="w-3 h-3" />, endpoint: "/api/mode/dtr",    active: activeMode === "DTR"          && activeStrategy !== "XXX" },
-                    { label: "XXX",     icon: null,                               endpoint: "/api/mode/xxx",    active: activeMode === "DTR"          && activeStrategy === "XXX" },
-                    { label: "AI MODE", icon: null,                               endpoint: "/api/mode/claude", active: activeMode === "CLAUDE+HERMES" },
-                    { label: "HALT",    icon: null,                               endpoint: "/api/mode/halt",   active: activeMode === "HALT" },
-                  ].map(({ label, icon, endpoint, active }) => (
+                    { label: "DTR",     icon: <BarChart2 className="w-3 h-3" />, endpoint: "/api/mode/dtr",    optimistic: "DTR",           active: activeMode === "DTR"          && activeStrategy !== "XXX" },
+                    { label: "XXX",     icon: null,                               endpoint: "/api/mode/xxx",    optimistic: "XXX",           active: activeMode === "DTR"          && activeStrategy === "XXX" },
+                    { label: "AI MODE", icon: null,                               endpoint: "/api/mode/claude", optimistic: "CLAUDE+HERMES", active: activeMode === "CLAUDE+HERMES" },
+                    { label: "HALT",    icon: null,                               endpoint: "/api/mode/halt",   optimistic: "HALT",          active: activeMode === "HALT" },
+                  ].map(({ label, icon, endpoint, optimistic, active }) => (
                     <button key={label}
-                      disabled={!isAuthenticated}
-                      onClick={() => switchMode(endpoint)}
+                      disabled={!isAuthenticated || pendingMode !== null}
+                      onClick={() => switchMode(endpoint, optimistic)}
                       className={cn(
                         "h-[52px] font-mono font-bold text-sm rounded transition-all duration-150",
                         active

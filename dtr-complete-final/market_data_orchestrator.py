@@ -144,6 +144,9 @@ class MarketDataOrchestrator:
         # Populated in start() via search_contracts(). All API calls use these.
         self.contract_ids: Dict[str, str] = {}
 
+        # ── Tick counter (used to schedule periodic account refresh) ─────────
+        self._tick_count: int = 0
+
         # ── Injected by Flask after construction ──────────────────────────
         self._drawdown_monitor: DrawdownMonitor = None
 
@@ -320,11 +323,24 @@ class MarketDataOrchestrator:
 
     async def _tick(self) -> None:
         """One 60-second cycle: fetch bars → run strategy → fire signals → update dashboard."""
+        self._tick_count += 1
         now_ny = datetime.now(NY_TZ)
 
         # Daily equity snapshot at noon NY (fires once per minute window)
         if now_ny.hour == 12 and now_ny.minute == 0:
             asyncio.create_task(self._snapshot_equity())
+
+        # ── Refresh account list every 5 ticks (~5 min) ───────────────────
+        if self._tick_count % 5 == 1:  # also fires on first tick
+            try:
+                accounts = await self.api.get_accounts()
+                if accounts:
+                    self.available_accounts = accounts
+                    logger.info(f"🏦 Accounts refreshed: {[a.get('id') for a in accounts]}")
+                else:
+                    logger.warning("⚠️  Account refresh returned empty list")
+            except Exception as exc:
+                logger.warning(f"⚠️  Account refresh failed: {exc}")
 
         # ── Monitor open trades first (detect TP fills and closes) ─────────
         await self._monitor_open_trades()
