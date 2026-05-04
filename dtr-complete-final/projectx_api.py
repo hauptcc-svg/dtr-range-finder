@@ -152,10 +152,28 @@ class ProjectXAPI:
             accounts = await self.get_accounts()
             if not accounts:
                 return None
+
             if self.account_id:
+                needle = str(self.account_id)
+                # 1. Exact API id match
                 for acc in accounts:
-                    if str(acc.get("id")) == str(self.account_id):
+                    if str(acc.get("id")) == needle:
                         return acc
+                # 2. Account name contains the ID (TopstepX display number ≠ API id)
+                for acc in accounts:
+                    if needle in str(acc.get("name", "")):
+                        self.logger.info(
+                            f"🏦 account_id '{needle}' matched by name: "
+                            f"'{acc.get('name')}' (api_id={acc.get('id')})"
+                        )
+                        return acc
+
+            # 3. Prefer the only canTrade=True account
+            tradeable = [a for a in accounts if a.get("canTrade")]
+            if tradeable:
+                self.logger.info(f"🏦 Auto-selecting canTrade account: {tradeable[0].get('name')} (id={tradeable[0].get('id')})")
+                return tradeable[0]
+
             return accounts[0]
         except Exception as e:
             self.logger.error(f"❌ Error getting account: {e}")

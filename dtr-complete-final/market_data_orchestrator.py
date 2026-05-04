@@ -255,14 +255,35 @@ class MarketDataOrchestrator:
 
         # ── Account management ─────────────────────────────────────────────
         try:
-            accounts = await self.api.get_accounts()   # list of {id, name, balance}
+            accounts = await self.api.get_accounts()
             if accounts:
                 self.available_accounts = accounts
-                # Use env PROJECTX_ACCOUNT_ID if set, else first account
-                if not self.active_account_id and accounts:
-                    self.active_account_id = accounts[0].get("id", "")
-                await self.api.set_active_account(self.active_account_id)
-                logger.info(f"🏦 Using account: {self.active_account_id}")
+                needle = str(self.active_account_id)
+
+                # Try to find the configured account by exact API id
+                matched = next((a for a in accounts if str(a.get("id")) == needle), None)
+
+                # Fallback: match by name containing the configured number
+                if not matched and needle:
+                    matched = next((a for a in accounts if needle in str(a.get("name", ""))), None)
+                    if matched:
+                        logger.info(
+                            f"🏦 PROJECTX_ACCOUNT_ID '{needle}' matched by name "
+                            f"'{matched.get('name')}' → using api_id={matched.get('id')}"
+                        )
+
+                # Fallback: auto-select the only tradeable account
+                if not matched:
+                    tradeable = [a for a in accounts if a.get("canTrade")]
+                    matched = tradeable[0] if tradeable else accounts[0]
+                    logger.warning(
+                        f"⚠️  PROJECTX_ACCOUNT_ID '{needle}' not found — "
+                        f"auto-selecting canTrade account: {matched.get('name')} (id={matched.get('id')})"
+                    )
+
+                self.active_account_id = str(matched.get("id", ""))
+                self.api.account_id    = self.active_account_id
+                logger.info(f"🏦 Active account: {matched.get('name')} (id={self.active_account_id}, canTrade={matched.get('canTrade')})")
         except Exception as exc:
             logger.warning(f"⚠️  Could not fetch accounts: {exc}")
 

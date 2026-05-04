@@ -628,7 +628,43 @@ def debug_account():
     result["cached_available_accounts"] = orchestrator.available_accounts
     result["cached_active_account_id"]  = orchestrator.active_account_id
     result["dashboard_account"]         = orchestrator.get_dashboard_state().get("account", {})
+    result["contract_ids"]              = orchestrator.contract_ids
     return jsonify(result)
+
+
+@app.route("/api/debug/contracts", methods=["GET"])
+def debug_contracts():
+    """Show resolved contract IDs + test bar fetch for first instrument."""
+    import asyncio as _asyncio
+
+    loop = getattr(orchestrator, "_loop", None)
+    if loop is None or not loop.is_running():
+        return jsonify({"error": "Orchestrator loop not ready", "contract_ids": orchestrator.contract_ids}), 503
+
+    async def _test_bars():
+        results = {}
+        for symbol, cid in orchestrator.contract_ids.items():
+            try:
+                bars = await orchestrator.api.get_bars(cid, time_frame="1m", limit=5)
+                results[symbol] = {
+                    "contract_id": cid,
+                    "bars_returned": len(bars) if bars else 0,
+                    "latest_close": bars[-1].get("c") if bars else None,
+                }
+            except Exception as exc:
+                results[symbol] = {"contract_id": cid, "error": str(exc)}
+        return results
+
+    future = _asyncio.run_coroutine_threadsafe(_test_bars(), loop)
+    try:
+        results = future.result(timeout=20)
+    except Exception as exc:
+        return jsonify({"error": str(exc), "contract_ids": orchestrator.contract_ids}), 500
+
+    return jsonify({
+        "contract_ids": orchestrator.contract_ids,
+        "bar_test": results,
+    })
 
 
 @app.route("/api/accounts/select", methods=["POST"])
