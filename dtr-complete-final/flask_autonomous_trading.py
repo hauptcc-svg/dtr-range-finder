@@ -583,6 +583,20 @@ def list_accounts():
     })
 
 
+@app.route("/api/debug/auth", methods=["GET"])
+def debug_auth():
+    """Check authentication state of the running orchestrator."""
+    api = orchestrator.api
+    return jsonify({
+        "has_token": bool(api.access_token) if api else False,
+        "token_expires": api.token_expires_at.isoformat() if (api and api.token_expires_at) else None,
+        "account_id": api.account_id if api else None,
+        "halted": orchestrator.halted,
+        "halt_reason": orchestrator.halt_reason,
+        "mode": orchestrator.mode,
+    })
+
+
 @app.route("/api/debug/account", methods=["GET"])
 def debug_account():
     """

@@ -63,13 +63,13 @@ MULTI_INSTRUMENT_CONFIG = {
     },
     
     # ═══════════════════════════════════════════════════════════════════════
-    # INSTRUMENT 2: MCLK26 (Micro Crude Oil)
+    # INSTRUMENT 2: MCLN26 (Micro Crude Oil — July 2026 front-month)
     # ═══════════════════════════════════════════════════════════════════════
-    
-    "MCLK26": {
+
+    "MCLN26": {
         "enabled": True,
         "name": "Micro Crude Oil",
-        "contract": "MCLK26",
+        "contract": "MCLN26",
         
         # Position Sizing
         "qty": 2,
@@ -222,8 +222,8 @@ PERFORMANCE_TARGETS = {
         "avg_loss": 30,          # 30 points × $12.50 = $375
         "expected_daily_profit": 150,
     },
-    "mclk26": {
-        "contract": "MCLK26",
+    "mcln26": {
+        "contract": "MCLN26",
         "point_value": 10.00,
         "avg_win": 40,           # 40 points × $10 = $400
         "avg_loss": 25,          # 25 points × $10 = $250

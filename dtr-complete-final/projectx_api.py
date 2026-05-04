@@ -238,8 +238,6 @@ class ProjectXAPI:
                 "startTime": start_iso,
                 "endTime": end_iso,
                 "includePartialBar": False,
-                # Include accountId — required by some TopstepX history endpoints
-                "accountId": int(self.account_id) if str(self.account_id).isdigit() else self.account_id,
             }
 
             async with self.session.post(

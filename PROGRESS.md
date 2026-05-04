@@ -91,3 +91,34 @@
 [x] Added GET /api/debug/account endpoint — returns raw TopstepX response for balance diagnosis
 [x] Added periodic account refresh every 5 ticks (~5 min) in orchestrator _tick()
 [x] Added accountBalance, activeAccountId, availableAccounts to /api/agent/status response
+
+## 2026-05-04 (session 2 — continued debugging)
+
+[x] AccountSelector collapse/expand toggle — added ChevronDown/ChevronUp, persists in localStorage
+[x] Fixed AccountSelector visibility — was hidden when only 1 account (guard was `length <= 1`, changed to `length >= 1`)
+[x] Fixed account balance not updating after switch — added `overrideBalance` state for instant UI update
+    - Backend /api/accounts/select now returns `balance` in response (fetched immediately, no 60s wait)
+    - queryClient.invalidateQueries() triggered on switch for full status refresh
+[x] Fixed wrong active account — PROJECTX_ACCOUNT_ID=27501559 is display number, not API id
+    - Real tradeable account has API id 22459438 (name contains "27501559", only canTrade=True)
+    - Added 3-tier account matching: exact id → name contains needle → auto-select canTrade=True
+    - Applied in both projectx_api.get_account() AND orchestrator boot sequence
+[x] Fixed manual trade "Network error" — orchestrator.instruments doesn't exist
+    - /api/agent/manual-order was calling orchestrator.instruments.get(symbol) → AttributeError
+    - Fixed to orchestrator.contract_ids.get(symbol)
+[x] Added global JSON error handler to Flask — prevents HTML 500 pages reaching React frontend
+[x] Added /api/debug/contracts endpoint — shows resolved contract IDs + live bar test
+[x] Fixed contract search: search_contracts uses live=False (TopstepX only returns results with live=False)
+    - Previous commit mistakenly changed search to live=True which returned empty for all symbols
+[x] Fixed bar history API: /api/History/retrieveBars requires `endTime` (was missing — caused 400 errors)
+[x] Fixed bar unit: was unit=1 (seconds), changed to unit=2 (minutes)
+[x] Fixed bars=null handling: replaced .get("bars", []) with .get("bars") or [] (API returns null key, not missing key)
+[x] MCLK26 (May crude oil) not found by search — expired contract, needs updating to MCLN26 (July) or similar
+
+## Outstanding
+[ ] Bar history still returns errorCode=1, success=false — unconfirmed whether market hours issue or Combine account restriction
+    - All request params now correct (endTime, unit=2, live=True, contract IDs resolved)
+    - Must re-test during confirmed US market hours (10am–3pm ET weekday)
+[ ] MCLK26 symbol needs updating to current front-month crude oil contract
+[ ] Click DTR on dashboard to start strategy (only after bars confirmed working)
+[ ] Verify @decanatorfxbot responds to /help in Telegram
