@@ -667,41 +667,42 @@ def debug_contracts():
             now_utc = datetime.now(timezone.utc)
             end_utc   = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
             start_utc = (now_utc - timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            # Test unit=2 (Minute) with required endTime
+            # Test both live=True and live=False to find which works for Combine accounts
             for unit_val in [2]:
                 try:
                     await orchestrator.api.refresh_token_if_needed()
-                    acc_id = orchestrator.active_account_id or orchestrator.api.account_id
-                    body = {
-                        "contractId": cid,
-                        "live": True,
-                        "unit": unit_val,
-                        "unitNumber": 1,
-                        "limit": 10,
-                        "startTime": start_utc,
-                        "endTime": end_utc,
-                        "includePartialBar": False,
-                        # Some history endpoints require accountId
-                        "accountId": int(acc_id) if str(acc_id).isdigit() else acc_id,
-                    }
                     import aiohttp as _aiohttp
-                    async with orchestrator.api.session.post(
-                        f"{orchestrator.api.base_url}/api/History/retrieveBars",
-                        json=body,
-                        headers=orchestrator.api._get_headers(),
-                        timeout=_aiohttp.ClientTimeout(total=15)
-                    ) as resp:
-                        raw = await resp.json()
-                        bars = raw.get("bars") or []
-                        bar_probe[f"unit_{unit_val}"] = {
-                            "contract": cid,
-                            "http_status": resp.status,
-                            "bars_returned": len(bars),
-                            "latest_close": bars[-1].get("c") if bars else None,
-                            "full_response": raw,
-                        }
-                except Exception as exc:
-                    bar_probe[f"unit_{unit_val}"] = {"error": str(exc)}
+                    for live_flag in [True, False]:
+                        try:
+                            await orchestrator.api.refresh_token_if_needed()
+                            body = {
+                                "contractId": cid,
+                                "live": live_flag,
+                                "unit": unit_val,
+                                "unitNumber": 1,
+                                "limit": 10,
+                                "startTime": start_utc,
+                                "endTime": end_utc,
+                                "includePartialBar": False,
+                            }
+                            async with orchestrator.api.session.post(
+                                f"{orchestrator.api.base_url}/api/History/retrieveBars",
+                                json=body,
+                                headers=orchestrator.api._get_headers(),
+                                timeout=_aiohttp.ClientTimeout(total=15)
+                            ) as resp:
+                                raw = await resp.json()
+                                bars = raw.get("bars") or []
+                                key = f"unit_{unit_val}_live_{live_flag}"
+                                bar_probe[key] = {
+                                    "contract": cid,
+                                    "http_status": resp.status,
+                                    "bars_returned": len(bars),
+                                    "latest_close": bars[-1].get("c") if bars else None,
+                                    "full_response": raw,
+                                }
+                        except Exception as exc:
+                            bar_probe[f"unit_{unit_val}_live_{live_flag}"] = {"error": str(exc)}
         else:
             bar_probe["note"] = "No resolved contracts to test (all IDs still unresolved)"
 
