@@ -1555,23 +1555,27 @@ def toggle_instrument(symbol: str):
 #
 # TradingView alert message format (JSON body):
 #   {
-#     "secret":   "{{your_secret}}",
-#     "symbol":   "NAS100",          ← or TV alias: MNQ1!, US30, XAUUSD, etc.
-#     "side":     "BUY",             ← BUY or SELL  (hardcode — don't use {{strategy.order.action}})
-#     "quantity": 1,                 ← optional, defaults to instrument qty
-#     "sl":       19200.0,           ← optional stop-loss price
-#     "tp1":      19350.0,           ← optional take-profit 1 price
-#     "tp2":      19500.0,           ← optional take-profit 2 price (splits qty evenly with tp1)
-#     "comment":  "Long NAS100"      ← optional label
+#     "secret":   "YOUR_WEBHOOK_SECRET",
+#     "symbol":   "NAS100",           ← or any alias: MNQ1!, US30, XAUUSD, WTI, US500
+#     "side":     "BUY",              ← BUY or SELL  (hardcode per alert — don't use {{strategy.order.action}})
+#     "quantity": 1,                  ← optional, defaults to instrument config qty
+#     "comment":  "Long NAS100"       ← optional label
 #   }
+#
+# SL/TP are configured ONCE per instrument in multi_instrument_config.py:
+#   "sl_points":  20   ← points below/above fill for stop-loss
+#   "tp1_points": 40   ← points above/below fill for take-profit 1
+#   "tp2_points": 0    ← 0 = disabled; if set, qty is split in half between tp1 and tp2
+#
+# You can override per-alert by including "sl_points"/"tp1_points" in the JSON.
 #
 # Bracket order behaviour:
 #   • Entry always fires as MARKET.
-#   • If "sl" is set → STOP order placed on opposite side at that price.
-#   • If "tp1" is set (no tp2) → one LIMIT order for full quantity.
-#   • If both "tp1" and "tp2" set → two LIMIT orders, quantity split in half.
-#   • SL/TP orders are placed after a successful entry (orderId returned).
-#   • If a bracket order fails the entry is NOT reversed — check logs.
+#   • Fill price is fetched from open position immediately after entry.
+#   • SL → STOP order placed on opposite side at fill ± sl_points.
+#   • TP1 → LIMIT order at fill ± tp1_points (full qty, or half if tp2 also set).
+#   • TP2 → LIMIT order at fill ± tp2_points (other half of qty).
+#   • If a bracket order fails the entry is NOT reversed — check Railway logs.
 #
 # Webhook URL to paste in TradingView:
 #   https://dtr-range-finder-production.up.railway.app/api/webhook/tradingview
@@ -1655,16 +1659,13 @@ def tradingview_webhook():
     side      = str(data.get("side", "")).upper().strip()
     comment   = str(data.get("comment", "tv-alert"))
 
-    # Optional SL / TP prices (None = not set)
+    # Optional point-offset overrides (payload overrides config defaults)
     def _float_or_none(v):
         try:
-            return float(v) if v not in (None, "", "null") else None
+            f = float(v)
+            return f if f > 0 else None
         except (TypeError, ValueError):
             return None
-
-    sl_price  = _float_or_none(data.get("sl"))
-    tp1_price = _float_or_none(data.get("tp1"))
-    tp2_price = _float_or_none(data.get("tp2"))
 
     symbol = _TV_SYMBOL_MAP.get(tv_symbol)
     if not symbol:
@@ -1725,74 +1726,106 @@ def tradingview_webhook():
     entry_order_id = result.get("orderId")
     logger.info("✅ TradingView webhook: %s %s × %d → orderId=%s", side, symbol, quantity, entry_order_id)
 
+    # ── Resolve bracket offsets (payload > instrument config > disabled) ──────
+    inst_cfg = _cfg.get(symbol, {})
+    sl_pts  = _float_or_none(data.get("sl_points"))  or _float_or_none(inst_cfg.get("sl_points"))
+    tp1_pts = _float_or_none(data.get("tp1_points")) or _float_or_none(inst_cfg.get("tp1_points"))
+    tp2_pts = _float_or_none(data.get("tp2_points")) or _float_or_none(inst_cfg.get("tp2_points"))
+
     # ── Bracket orders (SL / TP) ──────────────────────────────────────────────
-    bracket_side = "SELL" if side == "BUY" else "BUY"
     bracket_results = []
 
-    if sl_price is not None:
-        try:
-            sl_result = _run(
-                orchestrator.api.place_order(
-                    contract_id, bracket_side, quantity, "STOP",
-                    stop_price=sl_price, comment=f"SL-{comment}"
-                )
-            )
-            if sl_result and sl_result.get("success", True):
-                logger.info("✅ SL order placed @ %s → orderId=%s", sl_price, sl_result.get("orderId"))
-                bracket_results.append({"type": "sl", "price": sl_price, "orderId": sl_result.get("orderId")})
-            else:
-                err = (sl_result or {}).get("errorMessage", "unknown")
-                logger.error("❌ SL order failed: %s", err)
-                bracket_results.append({"type": "sl", "price": sl_price, "error": err})
-        except Exception as exc:
-            logger.error("❌ SL order exception: %s", exc)
-            bracket_results.append({"type": "sl", "price": sl_price, "error": str(exc)})
-
-    if tp1_price is not None:
-        # If both tp1 and tp2, split quantity in half (each gets floor(qty/2), tp1 gets remainder)
-        if tp2_price is not None:
-            tp1_qty = (quantity + 1) // 2  # ceiling half
-            tp2_qty = quantity // 2        # floor half
-        else:
-            tp1_qty = quantity
-            tp2_qty = 0
-
-        try:
-            tp1_result = _run(
-                orchestrator.api.place_order(
-                    contract_id, bracket_side, tp1_qty, "LIMIT",
-                    limit_price=tp1_price, comment=f"TP1-{comment}"
-                )
-            )
-            if tp1_result and tp1_result.get("success", True):
-                logger.info("✅ TP1 order placed @ %s → orderId=%s", tp1_price, tp1_result.get("orderId"))
-                bracket_results.append({"type": "tp1", "price": tp1_price, "orderId": tp1_result.get("orderId")})
-            else:
-                err = (tp1_result or {}).get("errorMessage", "unknown")
-                logger.error("❌ TP1 order failed: %s", err)
-                bracket_results.append({"type": "tp1", "price": tp1_price, "error": err})
-        except Exception as exc:
-            logger.error("❌ TP1 order exception: %s", exc)
-            bracket_results.append({"type": "tp1", "price": tp1_price, "error": str(exc)})
-
-        if tp2_price is not None and tp2_qty > 0:
+    if sl_pts or tp1_pts:
+        # Fetch fill price from open position (MARKET fills instantly)
+        import time as _time
+        fill_price = None
+        for _attempt in range(3):
             try:
-                tp2_result = _run(
-                    orchestrator.api.place_order(
-                        contract_id, bracket_side, tp2_qty, "LIMIT",
-                        limit_price=tp2_price, comment=f"TP2-{comment}"
+                positions = _run(orchestrator.api.get_positions())
+                for pos in (positions or []):
+                    pos_cid = str(pos.get("contractId") or pos.get("contract_id", ""))
+                    if pos_cid == str(contract_id):
+                        fill_price = (
+                            pos.get("averagePrice") or pos.get("avgPrice") or
+                            pos.get("entryPrice") or pos.get("average_price")
+                        )
+                        break
+            except Exception:
+                pass
+            if fill_price:
+                break
+            _time.sleep(0.5)
+
+        if fill_price is None:
+            logger.warning("⚠️  Could not fetch fill price for bracket orders on %s", symbol)
+        else:
+            fill_price = float(fill_price)
+            bracket_side = "SELL" if side == "BUY" else "BUY"
+            sl_dir  = -1 if side == "BUY" else 1   # SL goes against trade
+            tp_dir  =  1 if side == "BUY" else -1  # TP goes with trade
+
+            if sl_pts:
+                sl_price = round(fill_price + sl_dir * sl_pts, 4)
+                try:
+                    sl_result = _run(
+                        orchestrator.api.place_order(
+                            contract_id, bracket_side, quantity, "STOP",
+                            stop_price=sl_price, comment=f"SL-{comment}"
+                        )
                     )
-                )
-                if tp2_result and tp2_result.get("success", True):
-                    logger.info("✅ TP2 order placed @ %s → orderId=%s", tp2_price, tp2_result.get("orderId"))
-                    bracket_results.append({"type": "tp2", "price": tp2_price, "orderId": tp2_result.get("orderId")})
-                else:
-                    err = (tp2_result or {}).get("errorMessage", "unknown")
-                    logger.error("❌ TP2 order failed: %s", err)
-                    bracket_results.append({"type": "tp2", "price": tp2_price, "error": err})
-            except Exception as exc:
-                logger.error("❌ TP2 order exception: %s", exc)
-                bracket_results.append({"type": "tp2", "price": tp2_price, "error": str(exc)})
+                    if sl_result and sl_result.get("success", True):
+                        logger.info("✅ SL placed @ %.4f (fill=%.4f - %s pts) orderId=%s",
+                                    sl_price, fill_price, sl_pts, sl_result.get("orderId"))
+                        bracket_results.append({"type": "sl", "price": sl_price, "orderId": sl_result.get("orderId")})
+                    else:
+                        err = (sl_result or {}).get("errorMessage", "unknown")
+                        logger.error("❌ SL order failed: %s", err)
+                        bracket_results.append({"type": "sl", "price": sl_price, "error": err})
+                except Exception as exc:
+                    logger.error("❌ SL order exception: %s", exc)
+                    bracket_results.append({"type": "sl", "error": str(exc)})
+
+            if tp1_pts:
+                tp1_price = round(fill_price + tp_dir * tp1_pts, 4)
+                tp1_qty = (quantity + 1) // 2 if tp2_pts else quantity
+
+                try:
+                    tp1_result = _run(
+                        orchestrator.api.place_order(
+                            contract_id, bracket_side, tp1_qty, "LIMIT",
+                            limit_price=tp1_price, comment=f"TP1-{comment}"
+                        )
+                    )
+                    if tp1_result and tp1_result.get("success", True):
+                        logger.info("✅ TP1 placed @ %.4f orderId=%s", tp1_price, tp1_result.get("orderId"))
+                        bracket_results.append({"type": "tp1", "price": tp1_price, "orderId": tp1_result.get("orderId")})
+                    else:
+                        err = (tp1_result or {}).get("errorMessage", "unknown")
+                        logger.error("❌ TP1 order failed: %s", err)
+                        bracket_results.append({"type": "tp1", "price": tp1_price, "error": err})
+                except Exception as exc:
+                    logger.error("❌ TP1 order exception: %s", exc)
+                    bracket_results.append({"type": "tp1", "error": str(exc)})
+
+                if tp2_pts:
+                    tp2_price = round(fill_price + tp_dir * tp2_pts, 4)
+                    tp2_qty = quantity // 2
+                    if tp2_qty > 0:
+                        try:
+                            tp2_result = _run(
+                                orchestrator.api.place_order(
+                                    contract_id, bracket_side, tp2_qty, "LIMIT",
+                                    limit_price=tp2_price, comment=f"TP2-{comment}"
+                                )
+                            )
+                            if tp2_result and tp2_result.get("success", True):
+                                logger.info("✅ TP2 placed @ %.4f orderId=%s", tp2_price, tp2_result.get("orderId"))
+                                bracket_results.append({"type": "tp2", "price": tp2_price, "orderId": tp2_result.get("orderId")})
+                            else:
+                                err = (tp2_result or {}).get("errorMessage", "unknown")
+                                bracket_results.append({"type": "tp2", "price": tp2_price, "error": err})
+                        except Exception as exc:
+                            bracket_results.append({"type": "tp2", "error": str(exc)})
 
     response = {
         "success": True,

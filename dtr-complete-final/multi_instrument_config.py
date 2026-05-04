@@ -28,12 +28,17 @@ MULTI_INSTRUMENT_CONFIG = {
     
     "MYMM26": {
         "enabled": True,
-        "name": "Mini Yen",
+        "name": "Micro YM (Dow)",
         "contract": "MYMM26",
-        
+
         # Position Sizing
         "qty": 2,
         "tp1_qty": 1,
+
+        # Bracket orders (points from fill price; 0 = disabled)
+        "sl_points": 30,      # Stop-loss: 30 pts below/above fill
+        "tp1_points": 50,     # Take-profit 1: 50 pts in favour
+        "tp2_points": 0,      # Take-profit 2: disabled
         
         # Session Times (NY timezone)
         # LONDON SESSION
@@ -70,10 +75,15 @@ MULTI_INSTRUMENT_CONFIG = {
         "enabled": True,
         "name": "Micro Crude Oil",
         "contract": "MCLN26",
-        
+
         # Position Sizing
         "qty": 2,
         "tp1_qty": 1,
+
+        # Bracket orders
+        "sl_points": 0.25,
+        "tp1_points": 0.50,
+        "tp2_points": 0,
         
         # Session Times
         "london_range_start": "01:12",
@@ -108,10 +118,15 @@ MULTI_INSTRUMENT_CONFIG = {
         "enabled": True,
         "name": "Micro Gold",
         "contract": "MGCM26",
-        
+
         # Position Sizing
         "qty": 2,
         "tp1_qty": 1,
+
+        # Bracket orders
+        "sl_points": 2.0,
+        "tp1_points": 4.0,
+        "tp2_points": 0,
         
         # Session Times
         "london_range_start": "01:12",
@@ -146,10 +161,15 @@ MULTI_INSTRUMENT_CONFIG = {
         "enabled": True,
         "name": "Micro NQ (Nasdaq 100)",
         "contract": "MNQM26",
-        
+
         # Position Sizing
         "qty": 3,
         "tp1_qty": 1,
+
+        # Bracket orders
+        "sl_points": 20,
+        "tp1_points": 40,
+        "tp2_points": 0,
         
         # Session Times
         "london_range_start": "01:12",
@@ -176,6 +196,49 @@ MULTI_INSTRUMENT_CONFIG = {
         "min_tick": 0.25,
     },
     
+    # ═══════════════════════════════════════════════════════════════════════
+    # INSTRUMENT 5: MESM26 (Micro S&P 500)
+    # ═══════════════════════════════════════════════════════════════════════
+
+    "MESM26": {
+        "enabled": True,
+        "name": "Micro S&P 500",
+        "contract": "MESM26",
+
+        # Position Sizing
+        "qty": 2,
+        "tp1_qty": 1,
+
+        # Bracket orders
+        "sl_points": 10,
+        "tp1_points": 20,
+        "tp2_points": 0,
+
+        # Session Times
+        "london_range_start": "01:12",
+        "london_range_end": "02:13",
+        "london_entry_start": "03:13",
+        "london_entry_end": "07:00",
+
+        "ny_range_start": "08:12",
+        "ny_range_end": "09:13",
+        "ny_entry_start": "09:13",
+        "ny_entry_end": "14:00",
+
+        # Entry Filters
+        "bias_candle_atr_mult": 0.5,
+        "sl_atr_buffer": 0.0,
+        "tp_mode": "Range Target",
+
+        # Daily Limits
+        "max_trades_per_day": 4,
+        "max_losses_per_direction": 2,
+
+        # Contract Specifications
+        "point_value": 5.00,
+        "min_tick": 0.25,
+    },
+
     # ═══════════════════════════════════════════════════════════════════════
     # PROJECTX API
     # ═══════════════════════════════════════════════════════════════════════
