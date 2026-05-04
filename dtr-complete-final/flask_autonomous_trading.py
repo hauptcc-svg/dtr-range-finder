@@ -690,10 +690,10 @@ def debug_contracts():
                         bars = raw.get("bars", [])
                         bar_probe[f"unit_{unit_val}"] = {
                             "contract": cid,
+                            "http_status": resp.status,
                             "bars_returned": len(bars),
                             "latest_close": bars[-1].get("c") if bars else None,
-                            "response_keys": list(raw.keys()) if isinstance(raw, dict) else str(type(raw)),
-                            "error_msg": raw.get("errorMessage") or raw.get("message"),
+                            "full_response": raw,  # full raw to see errors
                         }
                 except Exception as exc:
                     bar_probe[f"unit_{unit_val}"] = {"error": str(exc)}
