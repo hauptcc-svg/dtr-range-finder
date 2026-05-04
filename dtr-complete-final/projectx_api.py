@@ -334,13 +334,17 @@ class ProjectXAPI:
             type_map = {"MARKET": 1, "LIMIT": 2, "STOP": 3, "STOP_LIMIT": 4}
             side_map = {"BUY": 0, "LONG": 0, "SELL": 1, "SHORT": 1}
 
+            import time as _time
+            tag_base = comment if comment else "dtr"
+            unique_tag = f"{tag_base}-{int(_time.time() * 1000)}"
+
             order_data = {
                 "accountId": int(self.account_id) if str(self.account_id).isdigit() else self.account_id,
                 "contractId": int(contract_id) if str(contract_id).isdigit() else contract_id,
                 "type": type_map.get(order_type.upper(), 1),
                 "side": side_map.get(side.upper(), 0),
                 "size": quantity,
-                "customTag": comment or "dtr-agent",
+                "customTag": unique_tag,
             }
             if limit_price is not None:
                 order_data["limitPrice"] = limit_price
