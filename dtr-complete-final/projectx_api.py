@@ -117,8 +117,22 @@ class ProjectXAPI:
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("accounts", [])
-                return []
+                    # TopstepX may return accounts under different keys
+                    accounts = (
+                        data.get("accounts")
+                        or data.get("data")
+                        or data.get("result")
+                        or []
+                    )
+                    # If the response itself is a list, use it directly
+                    if not accounts and isinstance(data, list):
+                        accounts = data
+                    self.logger.info(f"🏦 get_accounts raw keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}, found {len(accounts)} account(s)")
+                    return accounts
+                else:
+                    raw = await resp.text()
+                    self.logger.error(f"❌ get_accounts HTTP {resp.status}: {raw[:300]}")
+                    return []
         except Exception as e:
             self.logger.error(f"❌ Error getting accounts: {e}")
             return []

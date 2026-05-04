@@ -36,6 +36,7 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -64,8 +65,11 @@ _RISK_FILE = Path(__file__).parent / "risk_settings.json"
 def _load_risk_settings() -> dict:
     """Load persisted risk settings, falling back to env var defaults."""
     defaults = {
-        "daily_loss_limit":    float(os.environ.get("DAILY_LOSS_LIMIT", 200)),
-        "daily_profit_target": float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+        "daily_loss_limit":         float(os.environ.get("DAILY_LOSS_LIMIT", 200)),
+        "daily_profit_target":      float(os.environ.get("DAILY_PROFIT_TARGET", 1400)),
+        "max_trades_per_day":       int(os.environ.get("MAX_TRADES_PER_DAY", 4)),
+        "max_losses_per_direction": int(os.environ.get("MAX_LOSSES_PER_DIRECTION", 2)),
+        "trading_locked":           False,
     }
     try:
         if _RISK_FILE.exists():
@@ -77,12 +81,64 @@ def _load_risk_settings() -> dict:
     return defaults
 
 def _save_risk_settings() -> None:
+    """Write to local JSON (fast, works during process lifetime)."""
     try:
         _RISK_FILE.write_text(json.dumps(_risk_settings, indent=2))
     except Exception as exc:
         logger.warning("Could not save risk_settings.json: %s", exc)
 
+
+def _load_risk_settings_supabase() -> Optional[dict]:
+    """
+    Load risk settings from Supabase platform_settings table.
+    Returns the saved dict, or None if unavailable.
+    Called after the orchestrator's _supabase client is ready.
+    """
+    try:
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not url or not key:
+            return None
+        sb = create_client(url, key)
+        resp = sb.table("platform_settings").select("value").eq("key", "risk_settings").single().execute()
+        if resp.data and isinstance(resp.data.get("value"), dict):
+            logger.info("✅ Loaded risk settings from Supabase: %s", resp.data["value"])
+            return resp.data["value"]
+    except Exception as exc:
+        logger.warning("Could not load risk settings from Supabase: %s", exc)
+    return None
+
+
+def _save_risk_settings_supabase() -> None:
+    """
+    Upsert risk settings into Supabase platform_settings.
+    Called after every save so settings survive Railway deploys.
+    """
+    try:
+        from supabase import create_client
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not url or not key:
+            return
+        sb = create_client(url, key)
+        sb.table("platform_settings").upsert({
+            "key": "risk_settings",
+            "value": _risk_settings,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+        logger.info("💾 Risk settings saved to Supabase")
+    except Exception as exc:
+        logger.warning("Could not save risk settings to Supabase: %s", exc)
+
+
 _risk_settings: dict = _load_risk_settings()
+
+# Try to overlay with Supabase values immediately (they win over JSON + env vars)
+_supabase_initial = _load_risk_settings_supabase()
+if _supabase_initial:
+    _risk_settings.update({k: v for k, v in _supabase_initial.items() if k in _risk_settings})
+    logger.info("Risk settings after Supabase overlay: %s", _risk_settings)
 
 CORS(app, origins=[
     os.environ.get("FRONTEND_URL", "http://localhost:5173"),
@@ -525,6 +581,49 @@ def list_accounts():
         "accounts":          orchestrator.available_accounts,
         "active_account_id": orchestrator.active_account_id,
     })
+
+
+@app.route("/api/debug/account", methods=["GET"])
+def debug_account():
+    """
+    Raw ProjectX account response for diagnosing balance issues.
+    Calls the API directly and returns the unmodified response body.
+    """
+    import asyncio as _asyncio
+    import aiohttp as _aiohttp
+
+    loop = getattr(orchestrator, "_loop", None)
+    if loop is None or not loop.is_running():
+        return jsonify({"error": "Orchestrator loop not ready"}), 503
+
+    async def _fetch():
+        api = orchestrator.api
+        if not api:
+            return {"error": "API not initialised"}
+        await api.refresh_token_if_needed()
+        try:
+            async with api.session.get(
+                f"{api.base_url}/api/Account/search",
+                params={"onlyActive": "true"},
+                headers=api._get_headers(),
+                timeout=_aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                body = await resp.json()
+                return {"status": resp.status, "body": body}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    future = _asyncio.run_coroutine_threadsafe(_fetch(), loop)
+    try:
+        result = future.result(timeout=15)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    # Also show what the orchestrator currently has cached
+    result["cached_available_accounts"] = orchestrator.available_accounts
+    result["cached_active_account_id"]  = orchestrator.active_account_id
+    result["dashboard_account"]         = orchestrator.get_dashboard_state().get("account", {})
+    return jsonify(result)
 
 
 @app.route("/api/accounts/select", methods=["POST"])
@@ -1085,13 +1184,17 @@ def get_agent_settings():
             "qty":     _cfg.get(sym, {}).get("qty", 1),
             "params":  strategy.get_params() if hasattr(strategy, "get_params") else {},
         }
+    # Return camelCase keys to match the React RiskSettings interface
     return jsonify({
-        "mode":                orchestrator.mode,
-        "active_strategy":     orchestrator.active_strategy_name,
-        "daily_loss_limit":    _risk_settings["daily_loss_limit"],
-        "daily_profit_target": _risk_settings["daily_profit_target"],
-        "instruments":         instruments_cfg,
-        "strategy_timeframes": orchestrator.strategy_timeframes,
+        "mode":                  orchestrator.mode,
+        "activeStrategy":        orchestrator.active_strategy_name,
+        "dailyLossLimit":        _risk_settings["daily_loss_limit"],
+        "dailyProfitTarget":     _risk_settings["daily_profit_target"],
+        "maxTradesPerDay":       _risk_settings.get("max_trades_per_day", 4),
+        "maxLossesPerDirection": _risk_settings.get("max_losses_per_direction", 2),
+        "tradingLocked":         _risk_settings.get("trading_locked", False),
+        "instruments":           instruments_cfg,
+        "strategy_timeframes":   orchestrator.strategy_timeframes,
     })
 
 
@@ -1099,29 +1202,56 @@ def get_agent_settings():
 def update_agent_settings():
     data = request.get_json() or {}
     changed = False
+
+    # Mode / strategy switches
     if "mode" in data and data["mode"] in ("DTR", "CLAUDE+HERMES", "HALT"):
         orchestrator.set_mode(data["mode"])
     if "active_strategy" in data:
         orchestrator.set_active_strategy(data["active_strategy"])
+
+    # Per-instrument quantity
     if "instrument_qty" in data:
         from multi_instrument_config import MULTI_INSTRUMENT_CONFIG as _cfg
         for sym, qty in data["instrument_qty"].items():
-            if sym in _cfg and isinstance(qty, int) and 1 <= qty <= 50:
-                _cfg[sym]["qty"] = qty
-    if "daily_loss_limit" in data:
-        val = float(data["daily_loss_limit"])
+            if sym in _cfg and isinstance(qty, (int, float)) and 1 <= int(qty) <= 50:
+                _cfg[sym]["qty"] = int(qty)
+
+    # Daily loss limit — accept both camelCase (frontend) and snake_case (legacy)
+    loss_val = data.get("dailyLossLimit") or data.get("daily_loss_limit")
+    if loss_val is not None:
+        val = float(loss_val)
         if val > 0:
             _risk_settings["daily_loss_limit"] = val
             drawdown_monitor.loss_limit = val
             changed = True
-    if "daily_profit_target" in data:
-        val = float(data["daily_profit_target"])
+
+    # Daily profit target — accept both camelCase and snake_case
+    profit_val = data.get("dailyProfitTarget") or data.get("daily_profit_target")
+    if profit_val is not None:
+        val = float(profit_val)
         if val > 0:
             _risk_settings["daily_profit_target"] = val
             drawdown_monitor.profit_target = val
             changed = True
+
+    # Max trades / losses per direction
+    if data.get("maxTradesPerDay") is not None:
+        val = int(data["maxTradesPerDay"])
+        if 1 <= val <= 20:
+            _risk_settings["max_trades_per_day"] = val
+            changed = True
+
+    if data.get("maxLossesPerDirection") is not None:
+        val = int(data["maxLossesPerDirection"])
+        if 1 <= val <= 10:
+            _risk_settings["max_losses_per_direction"] = val
+            changed = True
+
     if changed:
         _save_risk_settings()
+        # Also push to Supabase for deploy-safe persistence
+        _save_risk_settings_supabase()
+
     return jsonify({"success": True, "message": "Settings updated"})
 
 
