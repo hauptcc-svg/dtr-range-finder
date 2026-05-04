@@ -717,6 +717,8 @@ def debug_contracts():
                                 }
                         except Exception as exc:
                             bar_probe[f"unit_{unit_val}_live_{live_flag}"] = {"error": str(exc)}
+                except Exception as exc:
+                    bar_probe[f"unit_{unit_val}_outer"] = {"error": str(exc)}
         else:
             bar_probe["note"] = "No resolved contracts to test (all IDs still unresolved)"
 
